@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --color-bg: theme(colors.white);
+    --color-fg: theme(colors.gray.900);
+    --color-surface: theme(colors.gray.100);
+    --color-border: theme(colors.gray.200);
+    --color-muted: theme(colors.gray.500);
+  }
+
+  .dark {
+    --color-bg: theme(colors.gray.950);
+    --color-fg: theme(colors.gray.100);
+    --color-surface: theme(colors.gray.900);
+    --color-border: theme(colors.gray.700);
+    --color-muted: theme(colors.gray.400);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body, #root {
+    height: 100%;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+    background-color: var(--color-bg);
+    color: var(--color-fg);
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 14px;
+  }
+}
+
+/* 左上の地名検索ボックス（PlaceSearch.tsx）とズームボタンが重ならないよう、ズームボタンを少し下にずらす */
+.leaflet-top.leaflet-left .leaflet-control-zoom {
+  margin-top: 52px;
+}
+
+/* Leaflet dark mode tile invert（ベースマップ用 tilePane・重ね合わせ用 rasterOverlay ペインの双方に適用） */
+.dark .leaflet-tile-pane .invert-tile,
+.dark .leaflet-rasterOverlay-pane .invert-tile {
+  filter: invert(100%) hue-rotate(180deg);
+}
+
+/* Leaflet popup dark mode */
+.dark .leaflet-popup-content-wrapper,
+.dark .leaflet-popup-tip {
+  background-color: theme(colors.gray.800);
+  color: theme(colors.gray.100);
+}
+
+/* Scrollbar styles */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
+}

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  E2E テスト用フィクスチャ GPX。
+
+  設計意図:
+  - 全トラックポイントに <ele>（標高）を持たせている。アプリは標高が1つも無い
+    ファイルを読み込むと国土地理院の標高APIへ自動補完リクエストを送る仕様
+    （src/hooks/useFileLoader.ts の autoFillElevation）のため、標高を含めておく
+    ことでテストが外部APIに依存しないようにしている。
+  - <time> も全ポイントに付与し、タイムライン表示など時刻依存機能の横展開テスト
+    でも同じフィクスチャを使い回せるようにしている。
+  - 座標は東京駅周辺。アプリの初期表示中心（35.68, 139.77）に近く、
+    fitBounds の挙動確認がしやすい。
+  - ポイント数は5点と最小限。座標が完全に同一・同時刻だと重複除去
+    （dedupeConsecutivePoints）で削られてトースト内容が変わるため、全点を
+    わずかにずらしてある。
+-->
+<gpx version="1.1" creator="e2e-fixture" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>E2E Sample Track</name>
+    <trkseg>
+      <trkpt lat="35.681236" lon="139.767125"><ele>3.0</ele><time>2026-01-01T00:00:00Z</time></trkpt>
+      <trkpt lat="35.682000" lon="139.768000"><ele>4.0</ele><time>2026-01-01T00:01:00Z</time></trkpt>
+      <trkpt lat="35.683000" lon="139.769500"><ele>5.5</ele><time>2026-01-01T00:02:00Z</time></trkpt>
+      <trkpt lat="35.684200" lon="139.770300"><ele>6.0</ele><time>2026-01-01T00:03:00Z</time></trkpt>
+      <trkpt lat="35.685500" lon="139.771000"><ele>7.5</ele><time>2026-01-01T00:04:00Z</time></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

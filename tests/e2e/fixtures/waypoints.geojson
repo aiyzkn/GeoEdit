@@ -1,0 +1,16 @@
+{
+  "type": "FeatureCollection",
+  "comment": "Point Feature のみ = ライン系が無いため kind='waypoint' の単一ルートとして読み込まれる（route名はファイル名 'waypoints'）。",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "地点1", "description": "最初の地点" },
+      "geometry": { "type": "Point", "coordinates": [139.767125, 35.681236, 3.0] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "地点2" },
+      "geometry": { "type": "Point", "coordinates": [139.7695, 35.683, 5.5] }
+    }
+  ]
+}

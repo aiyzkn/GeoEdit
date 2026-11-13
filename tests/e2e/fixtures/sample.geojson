@@ -1,0 +1,26 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "GeoJSON Route",
+        "coordTimes": [
+          "2026-01-01T00:00:00Z",
+          "2026-01-01T00:01:00Z",
+          "2026-01-01T00:02:00Z",
+          "2026-01-01T00:03:00Z"
+        ]
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [139.767125, 35.681236, 3.0],
+          [139.768, 35.682, 4.0],
+          [139.7695, 35.683, 5.5],
+          [139.7703, 35.6842, 6.0]
+        ]
+      }
+    }
+  ]
+}

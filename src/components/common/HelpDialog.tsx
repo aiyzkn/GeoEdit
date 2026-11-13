@@ -1,0 +1,65 @@
+import { useUiStore } from '@/stores/uiStore'
+import Modal from './Modal'
+
+export default function HelpDialog() {
+  const { showHelp, setShowHelp } = useUiStore()
+  if (!showHelp) return null
+
+  return (
+    <Modal title={<h2 className="text-base font-semibold">ヘルプ</h2>} onClose={() => setShowHelp(false)} widthClassName="w-[480px]">
+      <div className="space-y-4">
+        <section>
+          <h3 className="font-semibold mb-2 text-sm">基本操作</h3>
+          <table className="w-full">
+            <tbody className="divide-y divide-[var(--color-border)]">
+              {[
+                ['ファイルを開く', 'ツールバー「開く」ボタン / ドラッグ＆ドロップ / Ctrl+O（Mac: Cmd+O）'],
+                ['ファイル形式', 'GeoJSON, GPX, KML に対応'],
+                ['元に戻す', 'Ctrl+Z（Mac: Cmd+Z）'],
+                ['やり直し', 'Ctrl+Y / Ctrl+Shift+Z（Mac: Cmd+Shift+Z）'],
+                ['モードキャンセル', 'Escape'],
+              ].map(([k, v]) => (
+                <tr key={k} className="py-1">
+                  <td className="pr-4 py-1 text-[var(--color-muted)] whitespace-nowrap">{k}</td>
+                  <td className="py-1">{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+
+        <section>
+          <h3 className="font-semibold mb-2 text-sm">編集機能</h3>
+          <table className="w-full">
+            <tbody className="divide-y divide-[var(--color-border)]">
+              {[
+                ['ルート作成', '地図をクリックしてポイントを追加し、確定で新規ルートを作成'],
+                ['分割', '地図またはタイムラインでポイントを選択して2つのルートに分割'],
+                ['区間削除', '開始・終了ポイントを選択して区間を削除'],
+                ['部分編集', 'ポイントをドラッグして位置を修正'],
+                ['間引き', '距離（累積）でポイントを間引き'],
+                ['時刻編集', '傾斜に基づくスピードで時刻を再計算'],
+                ['逆順', 'トラックのポイント順を逆にする'],
+                ['標高置換', '国土地理院APIから標高データを取得して置換'],
+              ].map(([k, v]) => (
+                <tr key={k} className="py-1">
+                  <td className="pr-4 py-1 text-[var(--color-muted)] whitespace-nowrap">{k}</td>
+                  <td className="py-1">{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+
+        <section>
+          <h3 className="font-semibold mb-2 text-sm">出力形式</h3>
+          <ul className="space-y-1 text-[var(--color-muted)]">
+            <li>• GPX（オリジナル / 最小 × ウェイポイント有無）</li>
+            <li>• GeoJSON</li>
+            <li>• KML</li>
+          </ul>
+        </section>
+      </div>
+    </Modal>
+  )
+}

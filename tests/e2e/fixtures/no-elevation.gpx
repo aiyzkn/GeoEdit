@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  標高を一切持たない GPX（時刻も無し）。読み込み時に「標高データが1点も無い」ため、
+  アプリが国土地理院の標高APIから自動補完する経路（useFileLoader の autoFillElevation）を
+  発動させる。総合テストの「標高補完→統計反映」シナリオで使用する。
+  API はテスト内で page.route によりモックする（全点 elevation=10 を返す）。
+-->
+<gpx version="1.1" creator="e2e-fixture" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>No Elevation Track</name>
+    <trkseg>
+      <trkpt lat="35.681236" lon="139.767125"></trkpt>
+      <trkpt lat="35.682000" lon="139.768000"></trkpt>
+      <trkpt lat="35.683000" lon="139.769500"></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

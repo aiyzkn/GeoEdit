@@ -1,0 +1,146 @@
+.DS_Store
+.idea
+.pnpm-store
+*.cpuprofile
+*.local
+*.log
+/.vscode/
+/docs/.vitepress/cache
+/docs/.vitepress/.temp
+/packages/vite/LICENSE
+dist
+dist-ssr
+explorations
+node_modules
+!**/glob-import/root/dir/node_modules
+!**/fixtures/glob-exports/node_modules
+!**/fixtures/glob-exports/node_modules/my-pkg/dist
+playground-temp
+temp
+TODOs.md
+.eslintcache
+
+
+# https://claude.ai/share/b3c01acf-c14c-464c-aa0a-9616ff7dc5b4 を改変
+
+# ==============================================================================
+# Claude Code 設定ファイル管理
+# ==============================================================================
+# 方針:
+#   - チーム共有ファイル (Git管理対象) は明示的に除外しない
+#   - 個人専用・マシン固有・機密情報は明示的に無視する
+#   - 公式仕様: https://code.claude.com/docs/ja/settings
+# ==============================================================================
+
+# --- 個人専用設定 (Claude Codeが自動でgitignoreに追加) ---
+# settings.local.json は Claude Code が作成時に自動で .gitignore に追加するが、
+# 明示的に記載しておくことで意図を明確化する
+.claude/settings.local.json
+
+# --- 個人用メモリファイル ---
+# CLAUDE.local.md はプロジェクトルートに配置する個人専用の追加指示
+# (注: 現在は非推奨とされる場合があり、代替として settings.local.json の活用を推奨)
+CLAUDE.local.md
+.claude/CLAUDE.local.md
+
+# --- Claude Code が生成する作業データ ---
+# トランスクリプト・プロンプト履歴・スナップショット・キャッシュ・ログ
+# これらには .env の内容や認証情報が含まれる可能性があるため必ず除外
+.claude/logs/
+.claude/*.log
+.claude/audit-*.log
+.claude/cache/
+.claude/snapshots/
+.claude/transcripts/
+.claude/projects/
+claude_verify_*_DELETE.*
+claude_temp_*
+claude_test_*
+temp_claude_*
+*_DELETE_ME.*
+
+# --- プラン・履歴ファイル ---
+# plansDirectory 設定でプロジェクトルート配下を指定している場合
+.claude/plans/
+
+# --- 個人用コマンド・Hook・Skill (記事独自の慣習に基づく) ---
+# 注: 以下のサブディレクトリは Claude Code の組み込み仕様ではなく
+#     チーム内で「local/ 配下は個人用」と取り決めた場合の慣習的な管理方法
+#     個人用コマンドは ~/.claude/commands/ への配置も検討すること
+.claude/commands/local/
+.claude/hooks/local/
+.claude/skills/local/
+.claude/agents/local/
+.claude/rules/local/
+
+# --- Worktree 関連 ---
+# subagent worktrees や .worktreeinclude で参照される個人環境ファイル
+.claude/worktrees/
+
+# ==============================================================================
+# 以下は Git 管理対象 (明示的に記載しない = 追跡される)
+# ==============================================================================
+# .claude/settings.json       ← チーム標準設定 (権限・環境変数・Hook定義)
+# .claude/CLAUDE.md           ← プロジェクト指示 (※ルート配置が公式推奨)
+# CLAUDE.md                   ← プロジェクト指示 (公式推奨の正規配置)
+# .claude/commands/*.md       ← チーム共有スラッシュコマンド
+# .claude/skills/*/SKILL.md   ← チーム共有Skill (commands の後継)
+# .claude/agents/*.md         ← チーム共有Subagent
+# .claude/hooks/*.sh          ← チーム共有Hook
+# .claude/rules/*.md          ← チーム共有ルール
+# .mcp.json                   ← プロジェクトスコープMCPサーバー定義
+# .worktreeinclude            ← worktreeに含めるgitignoredファイル定義
+# ==============================================================================
+
+# ==============================================================================
+# 機密情報 (Claude Code の deny 権限ルールと併用すること)
+# ==============================================================================
+# settings.json の permissions.deny にも同じパターンを追加することで、
+# Claude Code からのアクセス自体をブロックできる (二重防御)
+# ==============================================================================
+
+# 環境変数ファイル
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# 認証情報・シークレット
+secrets/
+credentials/
+*.pem
+*.key
+*_rsa
+*_dsa
+*_ed25519
+*.p12
+*.pfx
+
+# クラウドプロバイダ認証情報
+.aws/credentials
+.gcp/
+.azure/
+
+# ==============================================================================
+# 一般的な開発ファイル (言語・ツールに応じて追加)
+# ==============================================================================
+
+# OS
+.DS_Store
+Thumbs.db
+*~
+
+# エディタ
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# ==============================================================================
+# Playwright (E2E テスト)
+# ==============================================================================
+# テスト実行の成果物はすべて再生成可能なため Git 管理外
+/playwright-report/
+/test-results/

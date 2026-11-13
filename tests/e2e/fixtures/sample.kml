@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- E2E テスト用 KML フィクスチャ。1 Placemark = 1 ルート（route.name は Placemark の name）。 -->
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>KML Document</name>
+    <Placemark>
+      <name>KML Route</name>
+      <LineString>
+        <tessellate>1</tessellate>
+        <coordinates>
+          139.767125,35.681236,3.0
+          139.768,35.682,4.0
+          139.7695,35.683,5.5
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>
