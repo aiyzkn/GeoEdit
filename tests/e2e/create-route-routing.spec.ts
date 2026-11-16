@@ -95,6 +95,52 @@ test.describe('道路タイルあり', () => {
     await expect.poll(async () => page.locator(ROUTED).getAttribute('d')).not.toBe(before)
   })
 
+  test('線の上をドラッグすると、通過点が 1 つ増える（つまみ）', async ({ page }) => {
+    await startCreate(page)
+    const map = page.locator('.leaflet-container')
+    await map.click({ position: { x: 300, y: 120 } })
+    await map.click({ position: { x: 520, y: 230 } })
+    await expect(page.locator(ROUTED)).toHaveCount(1)
+    // 経路の線の、道のりの中ほどの点（画面の座標）
+    const mid = await page.locator(ROUTED).evaluate((el) => {
+      const path = el as SVGPathElement
+      const p = path.getPointAtLength(path.getTotalLength() / 2)
+      const m = path.getScreenCTM()!
+      return { x: p.x * m.a + p.y * m.c + m.e, y: p.x * m.b + p.y * m.d + m.f }
+    })
+    await page.mouse.move(mid.x - 3, mid.y)
+    await page.mouse.move(mid.x, mid.y)
+    await expect(page.locator('.create-leg-handle')).toBeVisible()
+    await page.mouse.down()
+    await page.mouse.move(mid.x + 40, mid.y + 60, { steps: 8 })
+    await page.mouse.up()
+    await expect(page.getByText('地図をクリックしてポイントを追加（3 点）')).toBeVisible()
+    await expect(page.locator(ROUTED)).toHaveCount(2)
+    // 取り消すと 2 点に戻る
+    await page.keyboard.press('Control+z')
+    await expect(page.getByText('地図をクリックしてポイントを追加（2 点）')).toBeVisible()
+  })
+
+  test('つまみをクリックしただけでは、通過点は増えない', async ({ page }) => {
+    await startCreate(page)
+    const map = page.locator('.leaflet-container')
+    await map.click({ position: { x: 300, y: 120 } })
+    await map.click({ position: { x: 520, y: 230 } })
+    await expect(page.locator(ROUTED)).toHaveCount(1)
+    const mid = await page.locator(ROUTED).evaluate((el) => {
+      const path = el as SVGPathElement
+      const p = path.getPointAtLength(path.getTotalLength() / 2)
+      const m = path.getScreenCTM()!
+      return { x: p.x * m.a + p.y * m.c + m.e, y: p.x * m.b + p.y * m.d + m.f }
+    })
+    await page.mouse.move(mid.x - 3, mid.y)
+    await page.mouse.move(mid.x, mid.y)
+    await expect(page.locator('.create-leg-handle')).toBeVisible()
+    await page.mouse.click(mid.x, mid.y)
+    await page.waitForTimeout(300)
+    await expect(page.getByText('地図をクリックしてポイントを追加（2 点）')).toBeVisible()
+  })
+
   test('設定を「最短」にすると、再読み込みしても残る。「既定に戻す」で標準に戻る', async ({ page }) => {
     await zoomIn(page, 1)
     await selectMode(page, '作成')

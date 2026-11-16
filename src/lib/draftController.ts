@@ -11,7 +11,7 @@ import { routeLeg, snapAnchor } from '@/lib/routingClient'
 import { resolveRoutingOptions } from '@/lib/routing/settings'
 import type { FallbackReason, LatLng } from '@/lib/routing'
 import {
-  addAnchor, bumpPending, moveAnchor, newId, pendingLegs, removeAnchor, resetAutoLegs, setLegResult,
+  addAnchor, bumpPending, insertAnchor, moveAnchor, newId, pendingLegs, removeAnchor, resetAutoLegs, setLegResult,
 } from '@/lib/editors/draft'
 import type { Draft, LegMode } from '@/types/editor'
 
@@ -136,6 +136,19 @@ let lastDragSent = 0
 
 export function beginAnchorDrag() {
   dragStart = store().draft
+}
+
+/**
+ * 線の上のつまみのドラッグ開始（§8.5）。区間に通過点を差し込み、その id を返す。
+ * 以後は通過点のドラッグと同じ（dragAnchorTo → endAnchorDrag）。区間が無ければ null
+ */
+export function insertAnchorOnLeg(legId: string, at: LatLng): string | null {
+  const d = store().draft
+  if (!d.legs.some((l) => l.id === legId)) return null
+  dragStart = d
+  const id = newId('a-')
+  store().setDraft(insertAnchor(d, legId, { id, lat: at.lat, lng: at.lng }))
+  return id
 }
 
 /** ドラッグ中。位置を反映し、150 ms に 1 回だけ前後の区間を頼む（最後の位置は必ず頼む） */
