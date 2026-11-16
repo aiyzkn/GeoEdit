@@ -36,6 +36,9 @@ export const LANE = {
   maxShiftPx: 30,
   /** 分離帯が途切れて描かれている所（交差点・横断歩道など）を、前後の分離帯の結果でつなぐ長さ（画素 ≒ 50 m） */
   bridgePx: 100,
+  /** 高速の本線で、中央値を取る範囲（前後の点数。±8 点 ≒ ±40 m）と、要る点数 */
+  motorwayWindow: 8,
+  motorwayMinSamples: 3,
   /** 区間の両端で、寄せる量を 0 から増やしていく長さ（画素 ≒ 20 m） */
   taperPx: 40,
   /** 寄せたあとの点の間引きの許容（画素） */
@@ -61,16 +64,33 @@ export function isSubwayDashColor(r: number, g: number, b: number): boolean {
   return r >= 90 && r <= 215 && r - g >= 30 && Math.abs(g - b) <= 20
 }
 
+/** 走査の値。一般道と高速道路の本線で分ける */
+export interface ScanParams {
+  /** 走査の半幅（画素） */
+  scanPx: number
+  /** 車道とみなす run の幅の下限。これより細い run は、分離帯の中（帯として描かれた分離帯の内側）や線のすき間とみなす */
+  minRunPx: number
+  maxRunPx: number
+  /** 分離帯とみなすすき間の上限 */
+  medianMaxPx: number
+}
+export const ROAD_SCAN: ScanParams = { scanPx: LANE.scanPx, minRunPx: LANE.minRunPx, maxRunPx: LANE.maxRunPx, medianMaxPx: LANE.medianMaxPx }
+/**
+ * 高速道路の本線: 片側 3 車線 + 路肩で 15 m（30 画素）を超え、分離帯が幅のある帯（2 本の線の間に 6〜8 画素の白）で
+ * 描かれる所がある。走査を広げ、12 画素（約 6 m）より細い run は車道とみなさない
+ */
+export const MOTORWAY_SCAN: ScanParams = { scanPx: 64, minRunPx: 12, maxRunPx: 90, medianMaxPx: 34 }
+
 /** 走査線（index R が線の上の点、index が増える向きが進む向きの左）の分類から、寄せる量（画素）を決める。決められなければ null */
 export function laneOffset(samples: Uint8Array): number | null {
   return laneScan(samples)?.offset ?? null
 }
 
 /** laneOffset と同じ。あわせて、分離帯が描かれていたか（divided）を返す */
-export function laneScan(samples: Uint8Array): { offset: number; divided: boolean } | null {
+export function laneScan(samples: Uint8Array, p: ScanParams = ROAD_SCAN): { offset: number; divided: boolean } | null {
   const R = (samples.length - 1) / 2
   const last = samples.length - 1
-  const runs = extractRuns(samples).filter((r) => r.end - r.start + 1 >= LANE.minRunPx)
+  const runs = extractRuns(samples).filter((r) => r.end - r.start + 1 >= p.minRunPx)
   const bounded = (r: { start: number; end: number }) => r.start > 0 && r.end < last
   const mid = (r: { start: number; end: number }) => (r.start + r.end) / 2
   // 分離帯が描かれている: 隣り合う 2 つの run の間に分離帯の幅のすき間があり、線の上の点がその近くにある。
@@ -79,15 +99,15 @@ export function laneScan(samples: Uint8Array): { offset: number; divided: boolea
   for (let i = 0; i + 1 < runs.length; i++) {
     const a = runs[i], b = runs[i + 1]
     const gap = b.start - a.end - 1
-    if (gap < LANE.medianMinPx || gap > LANE.medianMaxPx) continue
+    if (gap < LANE.medianMinPx || gap > p.medianMaxPx) continue
     if (R < a.start - LANE.nearPx || R > b.end + LANE.nearPx) continue
     if (!bounded(a) || !bounded(b)) continue
-    if (a.end - a.start + 1 > LANE.maxRunPx || b.end - b.start + 1 > LANE.maxRunPx) continue
+    if (a.end - a.start + 1 > p.maxRunPx || b.end - b.start + 1 > p.maxRunPx) continue
     const d = Math.abs((a.end + b.start) / 2 - R)
     if (!pair || d < pair.d) pair = { b, d }
   }
   // 線の上の点が、選んだすき間から離れすぎていなければ（どちらかの車道の中にある程度まで）、左側の車道へ
-  if (pair && pair.d <= LANE.medianMaxPx) return { offset: mid(pair.b) - R, divided: true } // 左側（index が大きい側）の車道の中心
+  if (pair && pair.d <= p.medianMaxPx) return { offset: mid(pair.b) - R, divided: true } // 左側（index が大きい側）の車道の中心
   // 分離帯が描かれていない: 線の上の点を含む（または近い）run の中心
   let best: { start: number; end: number } | null = null
   let bestD = Infinity
@@ -95,7 +115,7 @@ export function laneScan(samples: Uint8Array): { offset: number; divided: boolea
     const d = R < r.start ? r.start - R : R > r.end ? R - r.end : 0
     if (d < bestD) { bestD = d; best = r }
   }
-  if (!best || bestD > LANE.nearPx || !bounded(best) || best.end - best.start + 1 > LANE.maxRunPx) return null
+  if (!best || bestD > LANE.nearPx || !bounded(best) || best.end - best.start + 1 > p.maxRunPx) return null
   return { offset: mid(best) - R, divided: false }
 }
 
@@ -124,6 +144,17 @@ function simplify(pts: [number, number][], tol: number): [number, number][] {
     if (worst > tol) { keep[wi] = 1; stack.push([i0, wi], [wi, i1]) }
   }
   return pts.filter((_, i) => keep[i])
+}
+
+export interface CorrectOptions {
+  /**
+   * 高速道路の本線（上下線を兼ねる 1 本の線。画像ではいつも分離帯が描かれている）。
+   * 分離帯を見つけた点だけを使い、広い範囲の中央値で均す（注記・ランプの線・橋で 1 点ずつ振れないように。§14.5）
+   */
+  motorway?: boolean
+  /** false なら、その端で寄せる量を 0 に戻さない（端の点も動かす）。ランプへなめらかにつなぐとき。既定は true */
+  taperStart?: boolean
+  taperEnd?: boolean
 }
 
 export class LaneMatcher {
@@ -167,8 +198,7 @@ export class LaneMatcher {
   }
 
   /** (cx, cy) を中心に、向き (nx, ny) の走査線の分類。画像が無ければ null */
-  private scan(cx: number, cy: number, nx: number, ny: number): Uint8Array | null {
-    const R = LANE.scanPx
+  private scan(cx: number, cy: number, nx: number, ny: number, R: number): Uint8Array | null {
     const size = 2 * R + 1
     const patch = new Uint8Array(size * size)
     const x0 = Math.round(cx) - R, y0 = Math.round(cy) - R
@@ -193,7 +223,7 @@ export class LaneMatcher {
    * 分離帯のある区間の線（進む向きの順）を、画像の車線に合わせて返す。先頭と末尾の点は動かさない。
    * 画像を取れない・判定できない所は、元の線のまま（例外は投げない）
    */
-  async correct(points: LatLng[], signal?: AbortSignal): Promise<LatLng[]> {
+  async correct(points: LatLng[], signal?: AbortSignal, opts: CorrectOptions = {}): Promise<LatLng[]> {
     if (points.length < 2) return points
     const world = points.map((p) => latLngToWorld(p.lat, p.lng))
     // 1. 一定の間隔の点を作る（元の頂点も残す）
@@ -211,7 +241,8 @@ export class LaneMatcher {
     if (total < 2 * LANE.stepPx) return points
     // 2. 画像のタイルを取る
     const keys = new Set<string>()
-    const R = LANE.scanPx + 2
+    const sp = opts.motorway ? MOTORWAY_SCAN : ROAD_SCAN
+    const R = sp.scanPx + 2
     for (const p of samples) {
       for (const dx of [-R, R]) for (const dy of [-R, R]) keys.add(`${Math.floor((p.x + dx) / 256)}/${Math.floor((p.y + dy) / 256)}`)
     }
@@ -226,8 +257,8 @@ export class LaneMatcher {
       const tx = (b.x - a.x) / L, ty = (b.y - a.y) / L
       const nx = ty, ny = -tx // 画面の座標（y が下向き）で、進む向きの左
       normals.push([nx, ny])
-      const line = this.scan(samples[i].x, samples[i].y, nx, ny)
-      scans.push(line ? laneScan(line) : null)
+      const line = this.scan(samples[i].x, samples[i].y, nx, ny, sp.scanPx)
+      scans.push(line ? laneScan(line, sp) : null)
     }
     // 分離帯が描かれている所に挟まれた、短い「描かれていない」所（交差点など）は、車線を保ったまま通す
     const offs: (number | null)[] = scans.map((r, i) => {
@@ -242,29 +273,54 @@ export class LaneMatcher {
       return scans[left]!.offset + (scans[right]!.offset - scans[left]!.offset) * f
     })
     // 4. 決められなかった所は前後から補い、外れ値を中央値で均し、上限で切り、両端で 0 へ近づける
-    const filled = offs.map((o, i) => {
-      if (o !== null) return o
-      let l = i - 1, r = i + 1
-      while (l >= 0 && offs[l] === null) l--
-      while (r < offs.length && offs[r] === null) r++
-      if (l >= 0 && r < offs.length) {
-        const f = (samples[i].s - samples[l].s) / (samples[r].s - samples[l].s)
-        return offs[l]! + (offs[r]! - offs[l]!) * f
-      }
-      return l >= 0 ? offs[l]! : r < offs.length ? offs[r]! : 0
-    })
-    const smooth = filled.map((_, i) => median(filled.slice(Math.max(0, i - 2), i + 3)))
+    let smooth: number[]
+    if (opts.motorway) {
+      // 高速の本線: 分離帯を見つけた点だけを使い、前後 ±W 点（約 ±40 m）の中央値 → 移動平均で均す
+      const vals = scans.map((r) => (r && r.divided ? r.offset : null))
+      const W = LANE.motorwayWindow
+      const med: (number | null)[] = vals.map((_, i) => {
+        const win = vals.slice(Math.max(0, i - W), i + W + 1).filter((v): v is number => v !== null)
+        return win.length >= LANE.motorwayMinSamples ? median(win) : null
+      })
+      if (med.every((v) => v === null)) return points // どこでも分離帯を見つけられなかった
+      const filledM = med.map((v, i) => {
+        if (v !== null) return v
+        let l = i - 1, r = i + 1
+        while (l >= 0 && med[l] === null) l--
+        while (r < med.length && med[r] === null) r++
+        if (l >= 0 && r < med.length) return med[l]! + ((med[r]! - med[l]!) * (i - l)) / (r - l)
+        return l >= 0 ? med[l]! : med[r]!
+      })
+      smooth = filledM.map((_, i) => {
+        const win = filledM.slice(Math.max(0, i - 3), i + 4)
+        return win.reduce((x, y) => x + y, 0) / win.length
+      })
+    } else {
+      const filled = offs.map((o, i) => {
+        if (o !== null) return o
+        let l = i - 1, r = i + 1
+        while (l >= 0 && offs[l] === null) l--
+        while (r < offs.length && offs[r] === null) r++
+        if (l >= 0 && r < offs.length) {
+          const f = (samples[i].s - samples[l].s) / (samples[r].s - samples[l].s)
+          return offs[l]! + (offs[r]! - offs[l]!) * f
+        }
+        return l >= 0 ? offs[l]! : r < offs.length ? offs[r]! : 0
+      })
+      smooth = filled.map((_, i) => median(filled.slice(Math.max(0, i - 2), i + 3)))
+    }
+    const taperStart = opts.taperStart !== false, taperEnd = opts.taperEnd !== false
     const moved: [number, number][] = samples.map((p, i) => {
-      const taper = Math.min(1, p.s / LANE.taperPx, (total - p.s) / LANE.taperPx)
+      const taper = Math.min(1, taperStart ? p.s / LANE.taperPx : 1, taperEnd ? (total - p.s) / LANE.taperPx : 1)
       const o = Math.max(-LANE.maxShiftPx, Math.min(LANE.maxShiftPx, smooth[i])) * Math.max(0, taper)
       return [p.x + o * normals[i][0], p.y + o * normals[i][1]]
     })
-    moved[0] = [world[0][0], world[0][1]]
-    moved[moved.length - 1] = [world[world.length - 1][0], world[world.length - 1][1]]
+    if (taperStart) moved[0] = [world[0][0], world[0][1]]
+    if (taperEnd) moved[moved.length - 1] = [world[world.length - 1][0], world[world.length - 1][1]]
     // 5. 点を間引いて緯度経度に戻す
     return simplify(moved, LANE.simplifyPx).map(([x, y], i, arr) => {
-      if (i === 0) return { ...points[0] }
-      if (i === arr.length - 1) return { ...points[points.length - 1] }
+      if (i === 0 && taperStart) return { ...points[0] }
+      if (i === arr.length - 1 && taperEnd) return { ...points[points.length - 1] }
       const ll = worldToLatLng(x, y)
       return { lat: Math.round(ll.lat * 1e7) / 1e7, lng: Math.round(ll.lng * 1e7) / 1e7 }
     })
