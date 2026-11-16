@@ -74,6 +74,10 @@ export async function mockExternalNetwork(page: Page) {
       await route.fulfill({ json: { elevation: 10.0, hsrc: '5m（レーザ）' } })
     } else if (url.includes('msearch.gsi.go.jp')) {
       await route.fulfill({ json: [] })
+    } else if (url.includes('/experimental_bvmap/')) {
+      // 経路探索の道路タイル: 既定は「タイルなし」（経路探索は直線で代用する）。
+      // 道路を出したいテストは serveRoadTiles() で差し替える
+      await route.fulfill({ status: 404, body: '' })
     } else {
       await route.fulfill({ contentType: 'image/png', body: TRANSPARENT_PNG })
     }
@@ -143,6 +147,41 @@ export async function selectMode(page: Page, label: string) {
 /** 右サイドバーのタブを切り替える（ルート/レイヤー/属性/統計）。 */
 export async function switchTab(page: Page, label: 'ルート' | 'レイヤー' | '属性' | '統計') {
   await page.getByRole('button', { name: label, exact: true }).click()
+}
+
+/**
+ * 経路探索の道路タイル（z14）の要求すべてに、保存した実タイル 1 枚
+ * （tests/routing/fixtures/14_14488_6413.pbf。長野県の市街地）を返す。
+ * どのタイル番号にも同じ道路網が並ぶので、地図のどこでも道路がある状態になる
+ * （タイルの境界では道路がつながらないが、1 枚の中で完結する短い区間なら問題ない）。
+ * Worker の中からの要求も捕まえるため、page と context の両方に登録する
+ * （page の登録は mockExternalNetwork の 404 より後なので、こちらが勝つ）。
+ */
+export async function serveRoadTiles(page: Page) {
+  const body = fs.readFileSync(path.join(__dirname, '..', 'routing', 'fixtures', '14_14488_6413.pbf'))
+  const pattern = /\/experimental_bvmap\/14\/\d+\/\d+\.pbf/
+  const handler = (route: import('@playwright/test').Route) =>
+    route.fulfill({ status: 200, contentType: 'application/vnd.mapbox-vector-tile', body, headers: { 'Access-Control-Allow-Origin': '*' } })
+  await page.route(pattern, handler)
+  await page.context().route(pattern, handler)
+}
+
+/**
+ * index.html が unpkg から読む Leaflet の CSS を、node_modules の同じ版で返す。
+ * mockExternalNetwork は CSS も遮断するので、既定では地図の部品（マーカー・ズームボタン）が
+ * 配置されない。マーカーのドラッグなど、見た目の配置に頼るテストで使う。
+ */
+export async function serveLeafletCss(page: Page) {
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', 'node_modules', 'leaflet', 'dist', 'leaflet.css'))
+  await page.route(/unpkg\.com\/leaflet@[^/]+\/dist\/leaflet\.css/, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: css }))
+}
+
+/** 地図をズームインする（作成モードに入る前に使う。作成モード中のダブルクリックは通過点の追加になるため） */
+export async function zoomIn(page: Page, times: number) {
+  for (let i = 0; i < times; i++) {
+    await page.locator('.leaflet-control-zoom-in').click()
+  }
 }
 
 /** goto + 外部ネットワークモックをまとめた標準セットアップ。全スペックの beforeEach で呼ぶ。 */

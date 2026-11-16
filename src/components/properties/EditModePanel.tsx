@@ -11,6 +11,10 @@ import {
 import { fetchElevations } from '@/lib/elevationApi'
 import { useElevReplace } from '@/hooks/useElevReplace'
 import ExportDialog from '@/components/common/ExportDialog'
+import RoutingSettingsDialog from '@/components/properties/RoutingSettingsDialog'
+import { draftPoints, draftDistance } from '@/lib/editors/draft'
+import { removeLastAnchor, rerouteAll } from '@/lib/draftController'
+import { Settings2 } from 'lucide-react'
 import type { RouteData, TrackPoint } from '@/types/route'
 
 /** <input type="datetime-local"> 用に、ローカルタイムゾーンでの日時文字列を組み立てる（toISOString はUTC基準のためズレる） */
@@ -20,7 +24,7 @@ function toLocalDatetimeInputValue(d: Date): string {
 }
 
 export default function EditModePanel() {
-  const { mode, setMode, selection, setSelection, pushUndo, createPoints, removeLastCreatePoint, clearCreatePoints, setBusy, mergeTargetIds, partialEdit, clearPartialEdit, mapMatchEnabled, setMapMatchEnabled } = useEditorStore()
+  const { mode, setMode, selection, setSelection, pushUndo, draft, clearDraft, routingSettings, setRoutingSettings, routingProgress, setBusy, mergeTargetIds, partialEdit, clearPartialEdit, mapMatchEnabled, setMapMatchEnabled } = useEditorStore()
   const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, updateRoute, addRoute, removeRoute } = useRouteStore()
   const { addToast } = useUiStore()
   const { replaceElevations } = useElevReplace()
@@ -49,6 +53,7 @@ export default function EditModePanel() {
   const [splitName2, setSplitName2] = useState('')
   const [useFallbackEle, setUseFallbackEle] = useState(true)
   const [replacing, setReplacing] = useState(false)
+  const [showRoutingSettings, setShowRoutingSettings] = useState(false)
 
   // EditModePanel はアプリ全体で1度だけマウントされ、モード切替時に再マウントされない。
   // そのため route 依存の初期値を useState の初期化関数だけに任せると、
@@ -281,8 +286,12 @@ export default function EditModePanel() {
   }
 
   const handleCreateConfirm = async () => {
-    if (createPoints.length < 2) {
+    if (draft.anchors.length < 2) {
       addToast('info', '地図をクリックして2点以上追加してください')
+      return
+    }
+    if (draft.legs.some((l) => l.status === 'pending')) {
+      addToast('info', '経路の探索が終わってから確定してください')
       return
     }
     const name = createRouteName.trim() || `新規ルート ${routes.length + 1}`
@@ -307,7 +316,7 @@ export default function EditModePanel() {
       if (endTime.getTime() <= startTime.getTime()) { addToast('error', '終了日時は開始日時より後にしてください'); return }
     }
 
-    const pts = createPoints
+    const pts = draftPoints(draft)
     setCreating(true)
     setBusy(true)
     let elevs: (number | null)[] = []
@@ -334,7 +343,7 @@ export default function EditModePanel() {
     }
     pushUndo('ルート作成', routes)
     addRoute(newRoute)
-    clearCreatePoints()
+    clearDraft()
     setBusy(false)
     setCreating(false)
     addToast('success', `ルートを作成しました（${points.length} ポイント）`)
@@ -346,7 +355,8 @@ export default function EditModePanel() {
       {mode === 'create' && (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[var(--color-muted)]">新規ルート作成:</span>
-          <span>地図をクリックしてポイントを追加（{createPoints.length} 点）</span>
+          <span>地図をクリックしてポイントを追加（{draft.anchors.length} 点）</span>
+          {draft.legs.length > 0 && <span className="text-[var(--color-muted)]">{(draftDistance(draft) / 1000).toFixed(2)} km</span>}
           <input
             type="text"
             placeholder="ルート名"
@@ -381,25 +391,76 @@ export default function EditModePanel() {
           </label>
           <label
             className="flex items-center gap-1"
-            title="クリック地点を地図画像の解析で道路中心・交差点中心へ補正します。地理院地図（標準・淡色）表示中かつズーム15以上で有効。Ctrl（macOSは⌘）を押しながらクリックすると一時的に無効化"
+            title="通過点の間を、道路に沿って自動で結びます。Ctrl（macOSは⌘）を押しながらクリックすると、その区間だけ直線で結びます"
           >
-            <input type="checkbox" checked={mapMatchEnabled} onChange={(e) => setMapMatchEnabled(e.target.checked)} />
-            マップマッチング
+            <input type="checkbox" checked={routingSettings.enabled} onChange={(e) => setRoutingSettings({ enabled: e.target.checked })} />
+            経路探索
           </label>
           <button
-            onClick={removeLastCreatePoint}
-            disabled={createPoints.length === 0}
+            onClick={() => setShowRoutingSettings(true)}
+            aria-label="経路探索の設定"
+            title="経路探索の設定"
+            className="p-1 rounded hover:bg-[var(--color-border)]"
+          >
+            <Settings2 size={14} />
+          </button>
+          {routingSettings.enabled && (
+            <>
+              <label className="flex items-center gap-1">
+                <input type="checkbox" checked={routingSettings.avoidMotorway || routingSettings.avoidToll} disabled={routingSettings.avoidToll}
+                  onChange={(e) => setRoutingSettings({ avoidMotorway: e.target.checked })} />
+                高速を使わない
+              </label>
+              <label className="flex items-center gap-1">
+                <input type="checkbox" checked={routingSettings.avoidToll} onChange={(e) => setRoutingSettings({ avoidToll: e.target.checked })} />
+                有料道路を使わない
+              </label>
+              <button
+                onClick={rerouteAll}
+                disabled={!draft.legs.some((l) => l.mode === 'auto')}
+                title="経路探索で結んだ区間を、いまの設定で引き直します"
+                className="px-2 py-1 bg-[var(--color-border)] rounded hover:opacity-80 disabled:opacity-40"
+              >
+                引き直す
+              </button>
+            </>
+          )}
+          <label
+            className={`flex items-center gap-1 ${routingSettings.enabled ? 'opacity-50' : ''}`}
+            title={routingSettings.enabled
+              ? '経路探索が ON のときは、通過点を道路の中心線へ寄せます'
+              : 'クリック地点を地図画像の解析で道路中心・交差点中心へ補正します。地理院地図（標準・淡色）表示中かつズーム15以上で有効。Ctrl（macOSは⌘）を押しながらクリックすると一時的に無効化'}
+          >
+            <input type="checkbox" checked={mapMatchEnabled} disabled={routingSettings.enabled} onChange={(e) => setMapMatchEnabled(e.target.checked)} />
+            マップマッチング
+          </label>
+          {routingProgress && routingProgress.total >= 8 && (
+            <span className="text-[var(--color-muted)]">道路データを取得中 {routingProgress.done}/{routingProgress.total}</span>
+          )}
+          <button
+            onClick={removeLastAnchor}
+            disabled={draft.anchors.length === 0}
             className="px-2 py-1 bg-[var(--color-border)] rounded hover:opacity-80 disabled:opacity-40"
           >
             1点削除
           </button>
           <button
             onClick={handleCreateConfirm}
-            disabled={createPoints.length < 2 || creating}
+            disabled={draft.anchors.length < 2 || creating || draft.legs.some((l) => l.status === 'pending')}
             className="px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-500 disabled:opacity-40"
           >
-            {creating ? '作成中…' : '確定'}
+            {creating ? '作成中…' : draft.legs.some((l) => l.status === 'pending') ? '探索中…' : '確定'}
           </button>
+          {showRoutingSettings && (
+            <RoutingSettingsDialog
+              onClose={(changed) => {
+                setShowRoutingSettings(false)
+                if (changed && useEditorStore.getState().draft.legs.some((l) => l.mode === 'auto')) {
+                  addToast('info', '設定を変えました。「引き直す」で、引いた区間に反映できます')
+                }
+              }}
+            />
+          )}
         </div>
       )}
       {mode === 'split' && (
