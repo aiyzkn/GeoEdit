@@ -13,11 +13,12 @@ export interface TestLine {
   cls: number
   lv?: number
   struct?: number
+  med?: number
   pts: [number, number][]
 }
 
 export function makeTile(lines: TestLine[], x = TX, y = TY): RoadTile {
-  return buildRoadTile(x, y, lines.map((l) => ({ cls: l.cls, lv: l.lv ?? 0, struct: l.struct ?? 0, local: l.pts.flat() })))
+  return buildRoadTile(x, y, lines.map((l) => ({ cls: l.cls, lv: l.lv ?? 0, struct: l.struct ?? 0, med: l.med ?? 0, local: l.pts.flat() })))
 }
 
 export function graphOf(...tiles: RoadTile[]): RoadGraph {

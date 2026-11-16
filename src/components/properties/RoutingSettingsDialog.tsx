@@ -124,6 +124,17 @@ export default function RoutingSettingsDialog({ onClose }: Props) {
             onCommit={(v) => setRoutingSettings({ snapMotorwayBiasM: v })} />
         </fieldset>
 
+        <fieldset className="space-y-1">
+          <legend className="font-semibold mb-1">地図画像に合わせる</legend>
+          <label className="flex items-start gap-2">
+            <input type="checkbox" checked={settings.laneMatch} onChange={(e) => setRoutingSettings({ laneMatch: e.target.checked })} className="mt-0.5" />
+            <span>
+              分離帯のある道路の線を、地理院地図（標準地図）の画像に合わせる
+              <span className="block text-[var(--color-muted)]">分離帯が描かれている所は進む向きの左側（左側通行）の車道の中心へ、描かれていない所は道路全体の中心へ寄せます。表示中の背景地図に関係なく、標準地図の画像（最大ズーム）を取得します</span>
+            </span>
+          </label>
+        </fieldset>
+
         <div className="flex justify-between">
           <button
             onClick={() => setRoutingSettings({ ...DEFAULT_ROUTING_SETTINGS, enabled: settings.enabled, weights: [...DEFAULT_ROUTING_SETTINGS.weights] as ClassWeights })}

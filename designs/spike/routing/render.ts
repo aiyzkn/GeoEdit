@@ -7,10 +7,10 @@ const { PNG } = require('pngjs')
 const CACHE = new URL('./cache/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 fs.mkdirSync(CACHE, { recursive: true })
 const [latS, lngS, out] = process.argv.slice(2)
-const lat = +latS, lng = +lngS, z = 17
+const lat = +latS, lng = +lngS, z = +(process.argv[5] ?? 17)
 const W = 256 * 2 ** z
 const px = (lng + 180) / 360 * W, py = (1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * W
-const S = 200, x0 = Math.round(px - S / 2), y0 = Math.round(py - S / 2)
+const S = +(process.argv[6] ?? 200), x0 = Math.round(px - S / 2), y0 = Math.round(py - S / 2)
 const img = new PNG({ width: S, height: S })
 const get = async (url: string, f: string) => { if (fs.existsSync(f)) return fs.readFileSync(f); const r = await fetch(url); const b = Buffer.from(await r.arrayBuffer()); fs.writeFileSync(f, b); return b }
 for (let ty = Math.floor(y0 / 256); ty <= Math.floor((y0 + S) / 256); ty++) for (let tx = Math.floor(x0 / 256); tx <= Math.floor((x0 + S) / 256); tx++) {
@@ -18,7 +18,7 @@ for (let ty = Math.floor(y0 / 256); ty <= Math.floor((y0 + S) / 256); ty++) for 
   for (let j = 0; j < 256; j++) for (let i = 0; i < 256; i++) { const X = tx * 256 + i - x0, Y = ty * 256 + j - y0; if (X < 0 || Y < 0 || X >= S || Y >= S) continue; const o = (j * 256 + i) * 4, d = (Y * S + X) * 4; for (let c = 0; c < 4; c++) img.data[d + c] = t.data[o + c] }
 }
 const k = 2 ** (z - 14) * 256 / 4096
-const t14x = Math.floor(px / 256 / 8), t14y = Math.floor(py / 256 / 8)
+const t14x = Math.floor(px / 256 / 2 ** (z - 14)), t14y = Math.floor(py / 256 / 2 ** (z - 14))
 for (let x = t14x - 1; x <= t14x + 1; x++) for (let y = t14y - 1; y <= t14y + 1; y++) {
   const b = await get(`https://cyberjapandata.gsi.go.jp/xyz/experimental_bvmap/14/${x}/${y}.pbf`, `${CACHE}14_${x}_${y}.pbf`)
   if (!b.length) continue
@@ -35,4 +35,12 @@ for (let x = t14x - 1; x <= t14x + 1; x++) for (let y = t14y - 1; y <= t14y + 1;
 }
 const d = ((S / 2) * S + S / 2) * 4
 for (let a = -3; a <= 3; a++) for (const [X, Y] of [[S / 2 + a, S / 2], [S / 2, S / 2 + a]]) { const o = (Y * S + X) * 4; img.data[o] = 0; img.data[o + 1] = 160; img.data[o + 2] = 0; img.data[o + 3] = 255 }
-fs.writeFileSync(out, PNG.sync.write(img))
+const scale = +(process.argv[7] ?? 1)
+if (scale > 1) {
+  const big = new PNG({ width: S * scale, height: S * scale })
+  for (let Y = 0; Y < S * scale; Y++) for (let X = 0; X < S * scale; X++) {
+    const o = (Math.floor(Y / scale) * S + Math.floor(X / scale)) * 4, d = (Y * S * scale + X) * 4
+    for (let c = 0; c < 4; c++) big.data[d + c] = img.data[o + c]
+  }
+  fs.writeFileSync(out, PNG.sync.write(big))
+} else fs.writeFileSync(out, PNG.sync.write(img))
