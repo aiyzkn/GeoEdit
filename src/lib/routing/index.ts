@@ -24,6 +24,9 @@ const COARSE_MARGIN_RATIO = 0.25
 const COARSE_GRAPH_CACHE = 4
 
 type TileKey = { x: number; y: number }
+/** 本線に挟まれた「分離帯なしの高速」を本線とみなす長さの上限（m）と、まっすぐとみなす角度（cos 15°） */
+const MAINLINE_GAP_M = 800
+const MAINLINE_STRAIGHT_COS = 0.966
 /** 分離帯のある辺に挟まれた、分離帯の無い辺をまとめて車線合わせの区間に入れる長さの上限（m） */
 const LANE_BRIDGE_EDGE_M = 50
 
@@ -129,6 +132,24 @@ export class Router {
       while (j < steps.length && kinds[j] === 'plain') { len += lenOf(steps[j]); j++ }
       if (i > 0 && j < steps.length && kinds[i - 1] === 'div' && kinds[j] === 'div' && len <= LANE_BRIDGE_EDGE_M) for (let k = i; k < j; k++) kinds[k] = 'div'
       i = j - 1
+    }
+    // 本線に挟まれた「分離帯なしの高速」で、まっすぐ続いているものは、本線のデータの抜けとして本線に入れる
+    // （関越道の池田の橋の付近 245 m が、属性では分離帯なしになっている）
+    if (useLane) {
+      for (let i = 0; i < steps.length; i++) {
+        if (kinds[i] !== 'ramp') continue
+        let j = i, len = 0
+        while (j < steps.length && kinds[j] === 'ramp') { len += lenOf(steps[j]); j++ }
+        if (i > 0 && j < steps.length && kinds[i - 1] === 'mw' && kinds[j] === 'mw' && len <= MAINLINE_GAP_M) {
+          let straight = true
+          for (let k = i; k <= j && straight; k++) {
+            const p = steps[k - 1], q = steps[k]
+            if (g.turnDot(p.edge, p.to > p.from ? 0 : 1, q.edge, q.to > q.from ? 0 : 1) < MAINLINE_STRAIGHT_COS) straight = false
+          }
+          if (straight) for (let k = i; k < j; k++) kinds[k] = 'mw'
+        }
+        i = j - 1
+      }
     }
     const segs: { kind: Kind; pts: LatLng[] }[] = []
     let cursor: LatLng = pts[pts.length - 1]

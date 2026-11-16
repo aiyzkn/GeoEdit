@@ -95,3 +95,57 @@ test('探索は、反対向きの車線のランプより、左のランプを�
   assert.ok(r.steps.some((s) => s.edge === 4), '左のランプを通る')
   assert.ok(!r.steps.some((s) => s.edge === 3), '右のランプは通らない')
 })
+
+// ── 2026-11-16 の追加（詳細設計書 §14.6） ──────────────────────────
+
+test('高速のランプの対（並んで走る出口と入口）は、弱い一方通行（±2）。逆向きは罰則つきで通れる', () => {
+  // 東西に並ぶ 2 本のランプ（分離帯なし。20 格子 ≒ 10 m 離れている）
+  const g = graphOf(makeTile([
+    { cls: 6, pts: [[0, 1990], [4000, 1990]] }, // 北の線
+    { cls: 6, pts: [[0, 2010], [4000, 2010]] }, // 南の線
+  ]))
+  assert.equal(g.oneway(0), 2) // 東行き（a → b）が正しい向き
+  assert.equal(g.oneway(1), -2)
+  // 北の線を西へ（逆向き）: 通れるが、罰則の分だけコストが増える
+  const fwd = search(g, posAt(g, 1000, 1990), posAt(g, 3000, 1990), STANDARD)!
+  const back = search(g, posAt(g, 3000, 1990), posAt(g, 1000, 1990), STANDARD)!
+  assert.ok(back)
+  assert.ok(Math.abs(fwd.distance - back.distance) < 1)
+  // 始点の辺は、逆向きでも罰則なし（置いた点からは、どちらへも出られる）。別の辺へ入るときに足す
+  const g2 = graphOf(makeTile([
+    { cls: 6, pts: [[0, 1990], [2000, 1990]] },
+    { cls: 6, pts: [[2000, 1990], [4000, 1990]] },
+    { cls: 6, pts: [[0, 2010], [4000, 2010]] },
+  ]))
+  const f2 = search(g2, posAt(g2, 1000, 1990), posAt(g2, 3000, 1990), STANDARD)!
+  const b2 = search(g2, posAt(g2, 3000, 1990), posAt(g2, 1000, 1990), STANDARD)!
+  assert.ok(Math.abs(b2.cost - f2.cost - ONEWAY.softWrongWayM) < 1, `cost ${f2.cost} ${b2.cost}`)
+})
+
+test('探索は、いま通った辺をそのまま引き返さない（行き止まりを除く）', () => {
+  // 東行きの国道から、(2000, 2000) で北の県道へ。北へ曲がるのに大きなコストがかかっても、
+  // 「先の交差点 (3000, 2000) まで行って戻る」経路にはならない
+  const g = graphOf(makeTile([
+    { cls: 4, pts: [[0, 2000], [2000, 2000]] },
+    { cls: 4, pts: [[2000, 2000], [3000, 2000]] },
+    { cls: 4, pts: [[3000, 2000], [4000, 2000]] },
+    { cls: 3, pts: [[2000, 2000], [2000, 0]] },
+  ]))
+  const r = search(g, posAt(g, 500, 2000), posAt(g, 2000, 1000), STANDARD)!
+  assert.deepEqual(r.steps.map((s) => s.edge), [0, 3])
+  // 行き止まりからは引き返せる（終点が手前にあるとき、始点の辺を両方向へ出る形で扱うので、ここでは経路があることだけ確かめる）
+  assert.ok(search(g, posAt(g, 3500, 2000), posAt(g, 500, 2000), STANDARD))
+})
+
+test('ランプから一般道へ: 鋭い折り返し（100° 超）には罰則。直角・浅い角度は 0', () => {
+  const g = graphOf(makeTile([
+    { cls: 6, pts: [[0, 2400], [1000, 2400], [2000, 2000]] },   // 0 東北東へ進んで国道へ合流するランプ
+    { cls: 4, med: 1, pts: [[2000, 2000], [4000, 2000]] },      // 1 国道（東）
+    { cls: 4, med: 1, pts: [[0, 2000], [2000, 2000]] },         // 2 国道（西）
+    { cls: 6, pts: [[2000, 3000], [2000, 2000]] },              // 3 真南から直角に来るランプ
+  ]))
+  assert.equal(g.turnCost(0, 0, 1, 0), 0) // そのまま東へ
+  assert.equal(g.turnCost(0, 0, 2, 1), ONEWAY.wrongSideRampM) // 西へ折り返す
+  assert.equal(g.turnCost(3, 0, 1, 0), 0) // 直角は右折も左折も 0
+  assert.equal(g.turnCost(3, 0, 2, 1), 0)
+})

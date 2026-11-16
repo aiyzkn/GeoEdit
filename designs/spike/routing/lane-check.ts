@@ -27,7 +27,8 @@ const on = resolveRoutingOptions({ ...DEFAULT_ROUTING_SETTINGS, laneMatch: true 
 const off = resolveRoutingOptions({ ...DEFAULT_ROUTING_SETTINGS, laneMatch: false })
 const r0 = await router.routeLeg(A, B, off), r1 = await router.routeLeg(A, B, on), r2 = await router.routeLeg(B, A, on)
 const latAt = (pts: { lat: number; lng: number }[], lng: number) => { for (let i = 1; i < pts.length; i++) { const a = pts[i - 1], b = pts[i]; if ((a.lng - lng) * (b.lng - lng) <= 0 && a.lng !== b.lng) return a.lat + (b.lat - a.lat) * (lng - a.lng) / (b.lng - a.lng) } return NaN }
-if (process.env.PROFILE) for (let k = 1; k < 10; k++) { const lng = A.lng + (B.lng - A.lng) * k / 10; const base = latAt(r0.points, lng); console.log(`lng ${lng.toFixed(5)}  A→B ${((latAt(r1.points, lng) - base) * 111000).toFixed(1)} m  B→A ${((latAt(r2.points, lng) - base) * 111000).toFixed(1)} m (+ = 北)`) }
+const NP = +(process.env.NP ?? 10)
+if (process.env.PROFILE) for (let k = 1; k < NP; k++) { const lng = A.lng + (B.lng - A.lng) * k / NP; const base = latAt(r0.points, lng); console.log(`lng ${lng.toFixed(5)}  A→B ${((latAt(r1.points, lng) - base) * 111000).toFixed(1)} m  B→A ${((latAt(r2.points, lng) - base) * 111000).toFixed(1)} m (+ = 北)`) }
 console.log(`off ${r0.points.length} pts ${r0.distance.toFixed(0)} m / on A→B ${r1.points.length} pts / on B→A ${r2.points.length} pts`)
 const z = +(process.env.Z ?? 18), Wd = 256 * 2 ** z
 const toPx = (p: { lat: number; lng: number }) => [(p.lng + 180) / 360 * Wd, (1 - Math.log(Math.tan(p.lat * Math.PI / 180) + 1 / Math.cos(p.lat * Math.PI / 180)) / Math.PI) / 2 * Wd]

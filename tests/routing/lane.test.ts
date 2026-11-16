@@ -190,3 +190,23 @@ test('高速の本線: 分離帯がどこにも見つからなければ、線は
   const pts = [ll(X0, Y0 + 3), ll(X1, Y0 + 3)]
   assert.equal(await m.correct(pts, undefined, { motorway: true }), pts)
 })
+
+test('画像タイルのキャッシュ: 上限を超えても、いま使うタイルは捨てない。取得の失敗は覚えない', async () => {
+  let calls = 0, failFirst = true
+  const base = motorwayRaster()
+  const src: RasterSource = async (z, x, y) => {
+    calls++
+    if (failFirst) { failFirst = false; throw new Error('temporary') } // 最初の 1 回だけ失敗（やり直しで取れる）
+    return base(z, x, y)
+  }
+  // 上限 2 枚（この線に要るタイルより少ない）でも、線の全体を合わせられる
+  const m = new LaneMatcher(src, { cacheTiles: 2 })
+  const pts = [ll(X0, Y0), ll(X1, Y0)]
+  const a = await m.correct(pts, undefined, { motorway: true })
+  assert.ok(Math.abs(midShift(a) - 23.5) <= 1.5, `first ${midShift(a)}`)
+  // 別の場所を合わせてキャッシュを入れ替えたあとでも、同じ結果
+  await m.correct([ll(X0 + 5000, Y0), ll(X1 + 5000, Y0)], undefined, { motorway: true })
+  const b = await m.correct(pts, undefined, { motorway: true })
+  assert.ok(Math.abs(midShift(b) - 23.5) <= 1.5, `again ${midShift(b)}`)
+  assert.ok(calls > 0)
+})

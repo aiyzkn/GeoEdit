@@ -39,6 +39,8 @@ export const LANE = {
   /** 高速の本線で、中央値を取る範囲（前後の点数。±8 点 ≒ ±40 m）と、要る点数 */
   motorwayWindow: 8,
   motorwayMinSamples: 3,
+  /** 画像タイルを同時に取る数 */
+  concurrency: 8,
   /** 区間の両端で、寄せる量を 0 から増やしていく長さ（画素 ≒ 20 m） */
   taperPx: 40,
   /** 寄せたあとの点の間引きの許容（画素） */
@@ -164,30 +166,47 @@ export class LaneMatcher {
 
   constructor(source: RasterSource, opts: { cacheTiles?: number } = {}) {
     this.source = source
-    this.max = opts.cacheTiles ?? 300
+    this.max = opts.cacheTiles ?? 600
   }
 
   private async loadTiles(keys: string[], signal?: AbortSignal) {
+    // いま使うタイルを「新しい」側へ移す（追い出しで、これから使うタイルを捨てないため）
+    for (const k of keys) {
+      const t = this.tiles.get(k)
+      if (t !== undefined) { this.tiles.delete(k); this.tiles.set(k, t) }
+    }
     const missing = keys.filter((k) => !this.tiles.has(k))
-    await Promise.all(missing.map(async (k) => {
+    const loadOne = async (k: string) => {
       const [x, y] = k.split('/').map(Number)
-      let cls: Uint8Array | null = null
-      try {
-        const img = await this.source(LANE_ZOOM, x, y, signal)
-        if (img && img.width === 256 && img.height === 256) {
-          cls = new Uint8Array(256 * 256)
-          const d = img.data
-          for (let i = 0; i < cls.length; i++) cls[i] = classifyLanePixel(d[4 * i], d[4 * i + 1], d[4 * i + 2])
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (signal?.aborted) return
+        try {
+          const img = await this.source(LANE_ZOOM, x, y, signal)
+          let cls: Uint8Array | null = null
+          if (img && img.width === 256 && img.height === 256) {
+            cls = new Uint8Array(256 * 256)
+            const d = img.data
+            for (let i = 0; i < cls.length; i++) cls[i] = classifyLanePixel(d[4 * i], d[4 * i + 1], d[4 * i + 2])
+          }
+          this.tiles.set(k, cls) // null = タイルが無い（404）。覚えておく
+          return
+        } catch {
+          // 取得の失敗（通信・一時的なエラー）は覚えない。1 回だけやり直し、だめなら今回は「無い」ものとして進む
         }
-      } catch {
-        cls = null
       }
-      this.tiles.set(k, cls)
+    }
+    // 同時に取るのは LANE.concurrency 枚まで
+    let next = 0
+    await Promise.all(Array.from({ length: Math.min(LANE.concurrency, missing.length) }, async () => {
+      while (next < missing.length) await loadOne(missing[next++])
     }))
-    while (this.tiles.size > this.max) {
-      const oldest = this.tiles.keys().next().value
-      if (oldest === undefined) break
-      this.tiles.delete(oldest)
+    // 上限を超えたら古いものから捨てる。ただし、いま使うタイルは捨てない
+    if (this.tiles.size > this.max) {
+      const need = new Set(keys)
+      for (const k of [...this.tiles.keys()]) {
+        if (this.tiles.size <= this.max) break
+        if (!need.has(k)) this.tiles.delete(k)
+      }
     }
   }
 

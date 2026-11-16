@@ -11,7 +11,8 @@ export function browserStdRaster(): RasterSource | null {
   return async (z, x, y, signal) => {
     const url = STD_TILE_URL.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y))
     const res = await fetch(url, { signal })
-    if (!res.ok) return null
+    if (res.status === 404) return null // タイルが無い
+    if (!res.ok) throw new Error(`標準地図のタイルの取得に失敗しました: HTTP ${res.status}`)
     const bmp = await createImageBitmap(await res.blob())
     try {
       const canvas = new OffscreenCanvas(bmp.width, bmp.height)
