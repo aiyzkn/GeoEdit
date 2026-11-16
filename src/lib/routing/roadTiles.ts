@@ -3,7 +3,7 @@
 import { VectorTile } from '@mapbox/vector-tile'
 import Pbf from 'pbf'
 import { EXTENT } from './geo.ts'
-import { roadClassOf, roadLevelOf, roadStructOf } from './roadClass.ts'
+import { roadClassOf, roadLevelOf, roadMedianOf, roadStructOf } from './roadClass.ts'
 import type { RoadTile, TileBytesLoader } from './types.ts'
 
 export const ROAD_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/experimental_bvmap/{z}/{x}/{y}.pbf'
@@ -39,7 +39,7 @@ export function clipLine(pts: number[], E = EXTENT): number[][] {
   return out.filter((l) => l.length >= 4)
 }
 
-interface RawLine { cls: number; lv: number; struct: number; local: number[] }
+interface RawLine { cls: number; lv: number; struct: number; med?: number; local: number[] }
 
 /** 線（タイル内の座標）の配列から RoadTile を作る。単体テストの補助にも使う */
 export function buildRoadTile(x: number, y: number, lines: RawLine[]): RoadTile {
@@ -50,7 +50,7 @@ export function buildRoadTile(x: number, y: number, lines: RawLine[]): RoadTile 
   for (const l of kept) nPts += l.local.length / 2
   const tile: RoadTile = {
     x, y, count,
-    cls: new Uint8Array(count), lv: new Uint8Array(count), struct: new Uint8Array(count),
+    cls: new Uint8Array(count), lv: new Uint8Array(count), struct: new Uint8Array(count), med: new Uint8Array(count),
     start: new Uint32Array(count + 1), coords: new Int32Array(nPts * 2),
   }
   let p = 0
@@ -58,6 +58,7 @@ export function buildRoadTile(x: number, y: number, lines: RawLine[]): RoadTile 
     tile.cls[i] = l.cls
     tile.lv[i] = l.lv
     tile.struct[i] = l.struct
+    tile.med[i] = l.med ?? 0
     tile.start[i] = p
     for (let k = 0; k < l.local.length; k += 2) {
       tile.coords[2 * p] = x * EXTENT + l.local[k]
@@ -87,10 +88,11 @@ export function decodeRoadTile(x: number, y: number, bytes: ArrayBuffer | Uint8A
     if (cls === 0) continue
     const lv = roadLevelOf(f.properties)
     const struct = roadStructOf(f.properties)
+    const med = roadMedianOf(f.properties)
     for (const ring of f.loadGeometry()) {
       const local: number[] = []
       for (const q of ring) local.push(Math.round(q.x * k), Math.round(q.y * k))
-      lines.push({ cls, lv, struct, local })
+      lines.push({ cls, lv, struct, med, local })
     }
   }
   return buildRoadTile(x, y, lines)

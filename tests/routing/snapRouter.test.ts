@@ -79,6 +79,11 @@ test('settings: 既定値・プリセット・カスタム・avoid', () => {
   assert.equal(resolveSearchParams({ ...d, avoidToll: true }).maxClass, 4)
   assert.equal(resolveRoutingOptions({ ...d, avoidToll: true }).snap.maxClass, 4)
   assert.deepEqual(presetParams('standard').weights, [8, 4, 2.4, 1.6, 1.2, 1.0])
+  // 分離帯のある道路を地図画像に合わせる（§13）: 既定は ON。止められる
+  assert.equal(resolveRoutingOptions(d).lane, true)
+  assert.equal(resolveRoutingOptions({ ...d, laneMatch: false }).lane, false)
+  assert.equal(sanitizeSettings({ laneMatch: 'x' }).laneMatch, true)
+  assert.equal(sanitizeSettings({ laneMatch: false }).laneMatch, false)
 })
 
 test('settings: 壊れた値は項目ごとに既定値へ戻す', () => {

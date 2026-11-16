@@ -25,6 +25,8 @@ export class RoadGraph {
   edgeCls: number[] = []
   edgeLv: number[] = []
   edgeStruct: number[] = []
+  /** 1 = 分離帯あり */
+  edgeMed: number[] = []
   edgeTile: number[] = []
   /** 形: tiles[edgeTile].coords の点の番号 edgeFrom 〜 edgeTo（両端を含む） */
   edgeFrom: number[] = []
@@ -135,6 +137,7 @@ export class RoadGraph {
     this.edgeCls.push(tile.cls[line])
     this.edgeLv.push(tile.lv[line])
     this.edgeStruct.push(tile.struct[line])
+    this.edgeMed.push(tile.med[line])
     this.edgeTile.push(ti)
     this.edgeFrom.push(from)
     this.edgeTo.push(to)

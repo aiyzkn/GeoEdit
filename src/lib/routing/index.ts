@@ -5,7 +5,9 @@ import { buildCoarseGraph, coarsePath, COARSE_ZOOM, type CoarseGraph } from './c
 import { distanceLL, metersPerUnit, pathDistance, round7 } from './geo.ts'
 import { RoadGraph } from './graph.ts'
 import { fetchCoarseRoadTileBytes, fetchRoadTileBytes, isAbortError, RoadTileCache } from './roadTiles.ts'
-import { search, stepsToPoints } from './search.ts'
+import { LaneMatcher, type RasterSource } from './lane.ts'
+import { browserStdRaster } from './raster.ts'
+import { search } from './search.ts'
 import { snapToGraph } from './snap.ts'
 import type { FallbackReason, GraphPos, LatLng, RouteResult, RoutingOptions, TileBytesLoader } from './types.ts'
 
@@ -22,6 +24,8 @@ const COARSE_MARGIN_RATIO = 0.25
 const COARSE_GRAPH_CACHE = 4
 
 type TileKey = { x: number; y: number }
+/** 分離帯のある辺に挟まれた、分離帯の無い辺をまとめて車線合わせの区間に入れる長さの上限（m） */
+const LANE_BRIDGE_EDGE_M = 50
 
 type Progress = (done: number, total: number) => void
 
@@ -39,11 +43,15 @@ export class Router {
   private readonly coarseCache: RoadTileCache
   private readonly coarseGraphs = new Map<string, CoarseGraph>()
   private graph = new RoadGraph()
+  private readonly lane: LaneMatcher | null
 
   constructor(
     loader: TileBytesLoader = fetchRoadTileBytes,
-    opts: { cacheTiles?: number; concurrency?: number; coarseLoader?: TileBytesLoader } = {},
+    opts: { cacheTiles?: number; concurrency?: number; coarseLoader?: TileBytesLoader; raster?: RasterSource | null } = {},
   ) {
+    // 画像の車線に合わせる処理（§13）。raster を省略したら、ブラウザなら標準地図を取る。Node では使わない
+    const raster = opts.raster === undefined ? browserStdRaster() : opts.raster
+    this.lane = raster ? new LaneMatcher(raster) : null
     this.cache = new RoadTileCache(loader, { max: opts.cacheTiles, concurrency: opts.concurrency })
     this.coarseCache = new RoadTileCache(opts.coarseLoader ?? fetchCoarseRoadTileBytes, { max: 400, concurrency: opts.concurrency })
   }
@@ -99,7 +107,39 @@ export class Router {
       if (!same(pts[pts.length - 1], q)) pts.push(q)
     }
     push(a)
-    for (const p of stepsToPoints(g, res.steps)) push(p)
+    // 辺ごとの点列。分離帯のある辺が続く所は、地図画像の車線に合わせる（§13）
+    let medRun: LatLng[] | null = null
+    const flush = async () => {
+      if (!medRun) return
+      const run = medRun
+      medRun = null
+      const fixed = this.lane && !signal?.aborted ? await this.lane.correct(run, signal) : run
+      for (const p of fixed) push(p)
+    }
+    // 分離帯のある辺に挟まれた短い辺（交差点の中など。属性が分離帯なしになっている）も、同じ区間に入れる
+    const steps = res.steps.filter((st) => st.from !== st.to)
+    const lenOf = (st: (typeof steps)[number]) => Math.abs(st.to - st.from) * g.edgeLen[st.edge]
+    const med = steps.map((st) => g.edgeMed[st.edge] === 1)
+    for (let i = 0; i < steps.length; i++) {
+      if (med[i]) continue
+      let j = i, len = 0
+      while (j < steps.length && !med[j]) { len += lenOf(steps[j]); j++ }
+      if (i > 0 && j < steps.length && len <= LANE_BRIDGE_EDGE_M) for (let k = i; k < j; k++) med[k] = true
+      i = j - 1
+    }
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i]
+      const shape = g.subShape(s.edge, s.from, s.to)
+      if (options.lane && this.lane && med[i]) {
+        if (!medRun) medRun = [pts[pts.length - 1]]
+        for (const p of shape) if (!same(medRun[medRun.length - 1], p)) medRun.push(p)
+      } else {
+        await flush()
+        for (const p of shape) push(p)
+      }
+    }
+    await flush()
+    if (signal?.aborted) return fallback(from, to, 'aborted')
     push(b)
     const last = { lat: to.lat, lng: to.lng }
     if (!same(pts[pts.length - 1], last)) pts.push(last)

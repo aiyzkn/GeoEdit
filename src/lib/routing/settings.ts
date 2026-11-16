@@ -16,6 +16,8 @@ export interface RoutingSettings {
   valleyPenaltyM: number
   snapRadiusM: number
   snapMotorwayBiasM: number
+  /** 分離帯のある道路を、地図画像の車線に合わせる（§13） */
+  laneMatch: boolean
 }
 
 export const ROUTING_SETTINGS_KEY = 'geoedit-routing'
@@ -44,6 +46,7 @@ export const DEFAULT_ROUTING_SETTINGS: RoutingSettings = {
   valleyPenaltyM: PRESETS.standard.valleyPenaltyM,
   snapRadiusM: 30,
   snapMotorwayBiasM: 15,
+  laneMatch: true,
 }
 
 /** 谷の数え方（市区町村道より下は、市区町村道として数える）。利用者には変えさせない（§11.1） */
@@ -86,6 +89,7 @@ export function sanitizeSettings(raw: unknown): RoutingSettings {
     valleyPenaltyM: clampNum(r.valleyPenaltyM, LIMITS.valleyPenaltyM, d.valleyPenaltyM),
     snapRadiusM: clampNum(r.snapRadiusM, LIMITS.snapRadiusM, d.snapRadiusM),
     snapMotorwayBiasM: clampNum(r.snapMotorwayBiasM, LIMITS.snapMotorwayBiasM, d.snapMotorwayBiasM),
+    laneMatch: bool(r.laneMatch, d.laneMatch),
   }
 }
 
@@ -110,5 +114,6 @@ export function resolveRoutingOptions(s: RoutingSettings): RoutingOptions {
   return {
     params: resolveSearchParams(s),
     snap: { radius: s.snapRadiusM, bias: s.snapMotorwayBiasM, maxClass: maxClassOf(s) },
+    lane: s.laneMatch,
   }
 }

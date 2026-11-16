@@ -42,6 +42,12 @@ export function roadStructOf(p: RoadProps): number {
   return d >= 1 && d <= 4 ? d - 1 : 0
 }
 
+/** 分離帯あり（medSect が 1 以上。99 は「幅員急変等非表示」で、分離帯はあるものとして扱う） */
+export function roadMedianOf(p: RoadProps & { medSect?: unknown }): number {
+  const m = num(p.medSect)
+  return m !== undefined && m > 0 ? 1 : 0
+}
+
 export function roadLevelOf(p: RoadProps): number {
   const lv = num(p.lvOrder) ?? 0
   return lv >= 0 && lv <= 255 ? lv : 0

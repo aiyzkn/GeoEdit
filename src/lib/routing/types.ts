@@ -21,6 +21,8 @@ export interface RoadTile {
   cls: Uint8Array
   lv: Uint8Array
   struct: Uint8Array
+  /** [count] 1 = 分離帯あり（medSect > 0）。分離帯のある道路だけ、地図画像の車線に合わせる（§13） */
+  med: Uint8Array
   /** [count + 1] coords の中の開始位置（点の番号） */
   start: Uint32Array
   /** [点の数 × 2] 世界座標（z14 のタイル番号 × 4096 + タイル内の座標）。x, y の順 */
@@ -51,6 +53,8 @@ export interface SnapParams {
 export interface RoutingOptions {
   params: SearchParams
   snap: SnapParams
+  /** 分離帯のある道路の線を、地図画像の車線に合わせる（§13）。省略は false */
+  lane?: boolean
 }
 
 /** 辺の上の位置。t は辺の a 端からの道のりの割合（0〜1） */
