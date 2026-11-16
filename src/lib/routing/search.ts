@@ -21,8 +21,9 @@ export interface SearchGraph {
   edgeCls: number[]
   nodeLat: number[]
   nodeLng: number[]
-  /** 一方通行: 1 = a → b だけ、-1 = b → a だけ、0 = 両方向。無ければ全部 両方向 */
+  /** 一方通行: 1 = a → b だけ、-1 = b → a だけ、0 = 両方向。±2 は弱い一方通行（逆向きは softWrongWayCost を足して通れる）。無ければ全部 両方向 */
   oneway?(e: number): number
+  softWrongWayCost?: number
   /** 辺 e1 を dir1 の向きに通ったあと、辺 e2 を dir2 の向きに進むときに足すコスト（m 相当。Infinity = 進めない。向きは 0 = a → b、1 = b → a）。無ければ 0 */
   turnCost?(e1: number, dir1: number, e2: number, dir2: number): number
 }
@@ -97,7 +98,12 @@ export function search(
   /** 辺 e を dir の向きに通れるか（一方通行。上下線が別の線になっている道路） */
   const allowed = (e: number, dir: number) => {
     const ow = g.oneway ? g.oneway(e) : 0
-    return ow === 0 || (ow > 0) === (dir === 0)
+    return ow === 0 || Math.abs(ow) === 2 || (ow > 0) === (dir === 0)
+  }
+  /** 弱い一方通行（±2）を逆向きに通るときに足すコスト */
+  const wrongWay = (e: number, dir: number) => {
+    const ow = g.oneway ? g.oneway(e) : 0
+    return Math.abs(ow) === 2 && (ow > 0) !== (dir === 0) ? (g.softWrongWayCost ?? 0) : 0
   }
 
   const relax = (state: number, node: number, cost: number, pr: Prev) => {
@@ -142,8 +148,11 @@ export function search(
       const dirs = g.edgeA[e] === g.edgeB[e] ? [0] : [g.edgeA[e] === node ? 0 : 1]
       for (const dir of dirs) {
         if (!allowed(e, dir)) continue
-        const turn = g.turnCost ? g.turnCost(e1, dir1, e, dir) : 0
-        if (turn === Infinity) continue
+        // いま通った辺をそのまま引き返さない（行き止まりを除く）。罰則を避けるための「次の交差点まで行って戻る」を防ぐ
+        if (e === e1 && g.adj[node].length > 1) continue
+        const turnOnly = g.turnCost ? g.turnCost(e1, dir1, e, dir) : 0
+        if (turnOnly === Infinity) continue
+        const turn = turnOnly + wrongWay(e, dir)
         const next = dir === 0 ? g.edgeB[e] : g.edgeA[e]
         const pen = valleyPenalty(c, top, ce, p)
         const ntop = Math.max(top, ce)

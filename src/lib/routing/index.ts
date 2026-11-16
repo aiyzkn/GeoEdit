@@ -2,7 +2,7 @@
 
 import { directRadius, planLeg, tilesAroundSegment, tilesAroundWorldSegment, CORRIDOR } from './corridor.ts'
 import { buildCoarseGraph, coarsePath, COARSE_ZOOM, type CoarseGraph } from './coarse.ts'
-import { distanceLL, metersPerUnit, pathDistance, round7 } from './geo.ts'
+import { distanceLL, latLngToWorld, metersPerUnit, pathDistance, round7 } from './geo.ts'
 import { RoadGraph } from './graph.ts'
 import { fetchCoarseRoadTileBytes, fetchRoadTileBytes, isAbortError, RoadTileCache } from './roadTiles.ts'
 import { LaneMatcher, type RasterSource } from './lane.ts'
@@ -24,6 +24,9 @@ const COARSE_MARGIN_RATIO = 0.25
 const COARSE_GRAPH_CACHE = 4
 
 type TileKey = { x: number; y: number }
+/** 本線に挟まれた「分離帯なしの高速」を本線とみなす長さの上限（m）と、まっすぐとみなす角度（cos 15°） */
+const MAINLINE_GAP_M = 800
+const MAINLINE_STRAIGHT_COS = 0.966
 /** 分離帯のある辺に挟まれた、分離帯の無い辺をまとめて車線合わせの区間に入れる長さの上限（m） */
 const LANE_BRIDGE_EDGE_M = 50
 
@@ -107,40 +110,78 @@ export class Router {
       if (!same(pts[pts.length - 1], q)) pts.push(q)
     }
     push(a)
-    // 辺ごとの点列。分離帯のある辺が続く所は、地図画像の車線に合わせる（§13）
-    let medRun: LatLng[] | null = null
-    const flush = async () => {
-      if (!medRun) return
-      const run = medRun
-      medRun = null
-      const fixed = this.lane && !signal?.aborted ? await this.lane.correct(run, signal) : run
-      for (const p of fixed) push(p)
-    }
-    // 分離帯のある辺に挟まれた短い辺（交差点の中など。属性が分離帯なしになっている）も、同じ区間に入れる
+    // 辺ごとの点列を、種類ごとの区間にまとめる。
+    //   div = 分離帯のある一般道（1 本の線）: 地図画像の車線に合わせる（§13）
+    //   mw = 高速道路の本線（上下線を兼ねる 1 本の線）: 進む向きの左側の車道の中心へ（§14.5）
+    //   ramp = 高速道路のランプ、plain = そのほか: そのまま
+    // 上下線が別々の線になっている道路（一方通行と推定できた辺）は、線がすでに車道ごとにあるので合わせない
+    type Kind = 'div' | 'mw' | 'ramp' | 'plain'
     const steps = res.steps.filter((st) => st.from !== st.to)
     const lenOf = (st: (typeof steps)[number]) => Math.abs(st.to - st.from) * g.edgeLen[st.edge]
-    // 対象は、分離帯のある 1 本の線だけ。高速道路と、上下線が別々の線になっている道路（一方通行と推定できた辺）は、
-    // 線がすでに車道ごとにあるので合わせない（合わせると、注記などで線が振れる。§14）
-    const med = steps.map((st) => g.edgeMed[st.edge] === 1 && g.edgeCls[st.edge] !== 6 && g.oneway(st.edge) === 0)
+    const useLane = options.lane === true && this.lane !== null
+    const kinds: Kind[] = steps.map((st) => {
+      const e = st.edge
+      const single = g.edgeMed[e] === 1 && g.oneway(e) === 0
+      if (g.edgeCls[e] === 6) return g.edgeMed[e] !== 1 ? 'ramp' : single && useLane ? 'mw' : 'plain'
+      return single && useLane ? 'div' : 'plain'
+    })
+    // 分離帯のある辺に挟まれた短い辺（交差点の中など。属性が分離帯なしになっている）も、同じ区間に入れる
     for (let i = 0; i < steps.length; i++) {
-      if (med[i]) continue
+      if (kinds[i] !== 'plain') continue
       let j = i, len = 0
-      while (j < steps.length && !med[j]) { len += lenOf(steps[j]); j++ }
-      if (i > 0 && j < steps.length && len <= LANE_BRIDGE_EDGE_M) for (let k = i; k < j; k++) med[k] = true
+      while (j < steps.length && kinds[j] === 'plain') { len += lenOf(steps[j]); j++ }
+      if (i > 0 && j < steps.length && kinds[i - 1] === 'div' && kinds[j] === 'div' && len <= LANE_BRIDGE_EDGE_M) for (let k = i; k < j; k++) kinds[k] = 'div'
       i = j - 1
     }
+    // 本線に挟まれた「分離帯なしの高速」で、まっすぐ続いているものは、本線のデータの抜けとして本線に入れる
+    // （関越道の池田の橋の付近 245 m が、属性では分離帯なしになっている）
+    if (useLane) {
+      for (let i = 0; i < steps.length; i++) {
+        if (kinds[i] !== 'ramp') continue
+        let j = i, len = 0
+        while (j < steps.length && kinds[j] === 'ramp') { len += lenOf(steps[j]); j++ }
+        if (i > 0 && j < steps.length && kinds[i - 1] === 'mw' && kinds[j] === 'mw' && len <= MAINLINE_GAP_M) {
+          let straight = true
+          for (let k = i; k <= j && straight; k++) {
+            const p = steps[k - 1], q = steps[k]
+            if (g.turnDot(p.edge, p.to > p.from ? 0 : 1, q.edge, q.to > q.from ? 0 : 1) < MAINLINE_STRAIGHT_COS) straight = false
+          }
+          if (straight) for (let k = i; k < j; k++) kinds[k] = 'mw'
+        }
+        i = j - 1
+      }
+    }
+    const segs: { kind: Kind; pts: LatLng[] }[] = []
+    let cursor: LatLng = pts[pts.length - 1]
     for (let i = 0; i < steps.length; i++) {
       const s = steps[i]
       const shape = g.subShape(s.edge, s.from, s.to)
-      if (options.lane && this.lane && med[i]) {
-        if (!medRun) medRun = [pts[pts.length - 1]]
-        for (const p of shape) if (!same(medRun[medRun.length - 1], p)) medRun.push(p)
-      } else {
-        await flush()
-        for (const p of shape) push(p)
+      let seg = segs[segs.length - 1]
+      if (!seg || seg.kind !== kinds[i]) { seg = { kind: kinds[i], pts: [cursor] }; segs.push(seg) }
+      for (const p of shape) if (!same(seg.pts[seg.pts.length - 1], p)) seg.pts.push(p)
+      cursor = seg.pts[seg.pts.length - 1]
+    }
+    for (let i = 0; i < segs.length && this.lane; i++) {
+      const seg = segs[i]
+      if (signal?.aborted) break
+      if (seg.pts.length < 2) continue
+      if (seg.kind === 'div') {
+        seg.pts = await this.lane.correct(seg.pts, signal)
+      } else if (seg.kind === 'mw') {
+        // 左へ分かれる・左から合流するランプとの間は、車線に寄せたままつなぐ（中央へ戻さない）
+        const prev = segs[i - 1], next = segs[i + 1]
+        const n = seg.pts.length
+        const node0 = seg.pts[0], node1 = seg.pts[n - 1], dir0 = seg.pts[1], dir1 = seg.pts[n - 2]
+        const joinStart = prev?.kind === 'ramp' && rampSide(node0, dir0, prev.pts, true) > 0
+        const joinEnd = next?.kind === 'ramp' && rampSide(node1, dir1, next.pts, false) > 0
+        const fixed = await this.lane.correct(seg.pts, signal, { motorway: true, taperStart: !joinStart, taperEnd: !joinEnd })
+        if (fixed === seg.pts) continue // 合わせられなかった
+        if (joinStart) prev.pts = trimRamp(prev.pts, node0, dir0, fixed[0], true)
+        if (joinEnd) next.pts = trimRamp(next.pts, node1, dir1, fixed[fixed.length - 1], false)
+        seg.pts = fixed
       }
     }
-    await flush()
+    for (const seg of segs) for (const p of seg.pts) push(p)
     if (signal?.aborted) return fallback(from, to, 'aborted')
     push(b)
     const last = { lat: to.lat, lng: to.lng }
@@ -218,6 +259,48 @@ export class Router {
     }
     for (const t of tiles) this.graph.addTile(t)
   }
+}
+
+/** 本線の端 node（そこから本線の中へ向かう点 inner）から見て、ランプが本線の進む向きの左にあれば正、右なら負 */
+function rampSide(node: LatLng, inner: LatLng, ramp: LatLng[], rampIsBefore: boolean): number {
+  const [nx, ny] = latLngToWorld(node.lat, node.lng)
+  const [ix, iy] = latLngToWorld(inner.lat, inner.lng)
+  // 本線の進む向き: ランプが手前（合流）なら node → inner、先（分岐）なら inner → node
+  let tx = rampIsBefore ? ix - nx : nx - ix, ty = rampIsBefore ? iy - ny : ny - iy
+  const L = Math.hypot(tx, ty) || 1
+  tx /= L; ty /= L
+  // ランプの、ノードから約 60 m（120 格子）離れた点
+  const order = rampIsBefore ? [...ramp].reverse() : ramp
+  let far = order[order.length - 1]
+  for (const p of order) {
+    const [px, py] = latLngToWorld(p.lat, p.lng)
+    if (Math.hypot(px - nx, py - ny) >= 120) { far = p; break }
+  }
+  const [fx, fy] = latLngToWorld(far.lat, far.lng)
+  return (fx - nx) * ty - (fy - ny) * tx // 画面の座標（y が下向き）で、正 = 左
+}
+
+/**
+ * 車線に寄せた本線の端 shifted と、ランプをなめらかにつなぐ: ランプの線のうち、本線の中央（node）から
+ * 寄せた車線の位置までを横切る部分（ノードに近い側）を落とす
+ */
+function trimRamp(ramp: LatLng[], node: LatLng, inner: LatLng, shifted: LatLng, rampIsBefore: boolean): LatLng[] {
+  const [nx, ny] = latLngToWorld(node.lat, node.lng)
+  const [ix, iy] = latLngToWorld(inner.lat, inner.lng)
+  const [sx, sy] = latLngToWorld(shifted.lat, shifted.lng)
+  let tx = rampIsBefore ? ix - nx : nx - ix, ty = rampIsBefore ? iy - ny : ny - iy
+  const L = Math.hypot(tx, ty) || 1
+  tx /= L; ty /= L
+  const d = (sx - nx) * ty - (sy - ny) * tx // 寄せた量（左が正）
+  if (!(d > 0)) return ramp
+  const lateral = (p: LatLng) => { const [px, py] = latLngToWorld(p.lat, p.lng); return (px - nx) * ty - (py - ny) * tx }
+  const dist = (p: LatLng) => { const [px, py] = latLngToWorld(p.lat, p.lng); return Math.hypot(px - nx, py - ny) }
+  const order = rampIsBefore ? [...ramp].reverse() : [...ramp]
+  // ノードに近い側から、まだ車線の位置より内側（中央寄り）にある点を落とす。300 m（600 格子）までで、最後の 1 点は残す
+  let k = 0
+  while (k < order.length - 1 && dist(order[k]) < 600 && lateral(order[k]) < d + 2) k++
+  const kept = order.slice(k)
+  return rampIsBefore ? kept.reverse() : kept
 }
 
 function dedupeTiles(keys: TileKey[]): TileKey[] {

@@ -130,3 +130,83 @@ test('画像を取れなければ、線はそのまま', async () => {
   const m2 = new LaneMatcher(async () => { throw new Error('network') })
   assert.equal(midShift(await m2.correct(pts)), -5)
 })
+
+// ── 高速道路の本線（§14.5） ─────────────────────────────────
+import { MOTORWAY_SCAN } from '../../src/lib/routing/lane.ts'
+
+test('laneScan（高速）: 帯として描かれた分離帯（2 本の線の間が白）でも、左側の車道の中心へ', () => {
+  // 129 画素。右の車道 20〜57、分離帯 58〜70（線 2 + 白 8 + 線 3。線の上の点 64 は白の中）、左の車道 71〜108
+  const parts: [string, number][] = [['.', 19], ['|', 1], ['#', 38], ['|', 2], ['#', 8], ['|', 3], ['#', 38], ['|', 1], ['.', 19]]
+  const str = parts.map(([c, n]) => c.repeat(n)).join('')
+  assert.equal(str.length, 129)
+  const r = laneScan(line(str), MOTORWAY_SCAN)!
+  assert.equal(r.divided, true)
+  assert.equal(r.offset, (71 + 108) / 2 - 64)
+})
+
+/** 東西に走る高速の本線の画像: 片側 34 画素の車道、中央に幅 12 画素の分離帯の帯（線 2 + 白 8 + 線 2）。noise の範囲は注記で塗りつぶす */
+function motorwayRaster(noise?: [number, number]): RasterSource {
+  return async (_z, x, y) => {
+    const data = new Uint8ClampedArray(256 * 256 * 4)
+    for (let j = 0; j < 256; j++) {
+      const d = y * 256 + j - Y0
+      let rgb = [200, 220, 180]
+      const a = Math.abs(d)
+      if (a <= 40) rgb = [255, 255, 255]
+      if (a === 41 || a === 5 || a === 6) rgb = [100, 100, 100]
+      for (let i = 0; i < 256; i++) {
+        const wx = x * 256 + i
+        const c = noise && wx >= noise[0] && wx <= noise[1] && a <= 45 ? [0, 0, 0] : rgb
+        const o = (j * 256 + i) * 4
+        data[o] = c[0]; data[o + 1] = c[1]; data[o + 2] = c[2]; data[o + 3] = 255
+      }
+    }
+    return { width: 256, height: 256, data }
+  }
+}
+
+test('高速の本線: 進む向きの左側の車道の中心へ。注記で一部が読めなくても線は振れない', async () => {
+  // 左の車道は d = -40〜-7（北側）。中心は 23.5 画素 北
+  for (const noise of [undefined, [X0 + 250, X0 + 300] as [number, number]]) {
+    const m = new LaneMatcher(motorwayRaster(noise))
+    const east = await m.correct([ll(X0, Y0), ll(X1, Y0)], undefined, { motorway: true })
+    // 中ほど（注記で読めない範囲を含む）で 23.5 ± 1.5 画素 北
+    assert.ok(Math.abs(midShift(east) - 23.5) <= 1.5, `east ${midShift(east)}`)
+    const west = await m.correct([ll(X1, Y0), ll(X0, Y0)], undefined, { motorway: true })
+    assert.ok(Math.abs(midShift(west) + 23.5) <= 1.5, `west ${midShift(west)}`)
+  }
+})
+
+test('高速の本線: taperEnd = false なら、終わりの点も車線に寄せたまま（ランプへつなぐとき）', async () => {
+  const m = new LaneMatcher(motorwayRaster())
+  const out = await m.correct([ll(X0, Y0), ll(X1, Y0)], undefined, { motorway: true, taperEnd: false })
+  const [, yEnd] = latLngToWorld(out[out.length - 1].lat, out[out.length - 1].lng)
+  assert.ok(Math.abs(Y0 - yEnd - 23.5) <= 1.5, `end ${Y0 - yEnd}`)
+  assert.deepEqual(out[0], ll(X0, Y0)) // 始まりは動かさない
+})
+
+test('高速の本線: 分離帯がどこにも見つからなければ、線はそのまま', async () => {
+  const m = new LaneMatcher(roadRaster(20, false))
+  const pts = [ll(X0, Y0 + 3), ll(X1, Y0 + 3)]
+  assert.equal(await m.correct(pts, undefined, { motorway: true }), pts)
+})
+
+test('画像タイルのキャッシュ: 上限を超えても、いま使うタイルは捨てない。取得の失敗は覚えない', async () => {
+  let calls = 0, failFirst = true
+  const base = motorwayRaster()
+  const src: RasterSource = async (z, x, y) => {
+    calls++
+    if (failFirst) { failFirst = false; throw new Error('temporary') } // 最初の 1 回だけ失敗（やり直しで取れる）
+    return base(z, x, y)
+  }
+  // 上限 2 枚（この線に要るタイルより少ない）でも、線の全体を合わせられる
+  const m = new LaneMatcher(src, { cacheTiles: 2 })
+  const pts = [ll(X0, Y0), ll(X1, Y0)]
+  const a = await m.correct(pts, undefined, { motorway: true })
+  assert.ok(Math.abs(midShift(a) - 23.5) <= 1.5, `first ${midShift(a)}`)
+  // 別の場所を合わせてキャッシュを入れ替えたあとでも、同じ結果
+  await m.correct([ll(X0 + 5000, Y0), ll(X1 + 5000, Y0)], undefined, { motorway: true })
+  const b = await m.correct(pts, undefined, { motorway: true })
+  assert.ok(Math.abs(midShift(b) - 23.5) <= 1.5, `again ${midShift(b)}`)
+  assert.ok(calls > 0)
+})
