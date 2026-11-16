@@ -20,7 +20,7 @@ const DRAG_THROTTLE_MS = 150
 const FALLBACK_MESSAGES: Record<Exclude<FallbackReason, 'aborted'>, string> = {
   'no-road': '近くに道路が無いため、直線で結びました',
   'no-route': '経路が見つからないため、直線で結びました',
-  'too-long': '区間が長すぎるため、直線で結びました。途中に通過点を置いてください',
+  'too-long': '区間が長すぎるため、直線で結びました。途中に通過点を置いてください（1 区間は直線距離で 100 km まで）',
   'tile-error': '道路データを取得できないため、直線で結びました',
 }
 

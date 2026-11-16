@@ -40,12 +40,19 @@ test('snap: 半径の外に道が無ければ null。寄せた位置をもう一
   assert.ok(Math.abs(s1.t - s2.t) < 1e-6)
 })
 
-test('planLeg: 段階 1 は 12 km まで 1 段階、それより長いと too-long', () => {
+test('planLeg: 5 km まで 1 段階、100 km まで 2 段階、それより長いと too-long', () => {
   assert.deepEqual(planLeg(3000), { kind: 'direct', radiusM: 1500 })
   assert.deepEqual(planLeg(1000), { kind: 'direct', radiusM: 1000 })
-  assert.equal(planLeg(11_000).kind, 'direct')
-  assert.equal(planLeg(20_000).kind, 'too-long')
+  assert.equal(planLeg(5000).kind, 'direct')
+  assert.equal(planLeg(20_000).kind, 'two-stage')
+  assert.equal(planLeg(99_000).kind, 'two-stage')
   assert.equal(planLeg(120_000).kind, 'too-long')
+})
+
+test('tilesAroundSegment: z12 のタイルも選べる（1 枚が z14 の 4 枚分）', () => {
+  const p = ll(2000, 2000)
+  const z12 = tilesAroundSegment(p, p, 100, 12)
+  assert.ok(z12.some((t) => t.x === Math.floor(14552 / 4) && t.y === Math.floor(TY / 4)))
 })
 
 test('tilesAroundSegment: 点のまわりは、そのタイルを含む', () => {
@@ -106,7 +113,7 @@ test('settings: 「最短」なら、角を県道で抜ける（谷の罰則が 
 // ---- Router（実タイルを返す loader） ----
 const FIX_X = 14488, FIX_Y = 6413
 const fixture = readFileSync(new URL('./fixtures/14_14488_6413.pbf', import.meta.url))
-const fixtureLoader = async (x: number, y: number) => (x === FIX_X && y === FIX_Y ? new Uint8Array(fixture).buffer : null)
+const fixtureLoader = async (x: number, y: number): Promise<ArrayBuffer | null> => (x === FIX_X && y === FIX_Y ? new Uint8Array(fixture).buffer : null)
 const OPTS = resolveRoutingOptions(DEFAULT_ROUTING_SETTINGS)
 
 function inFixture(fx: number, fy: number) {
@@ -143,10 +150,23 @@ test('Router: 始める前に abort されていれば aborted', async () => {
   assert.equal(r.reason, 'aborted')
 })
 
-test('Router: 道の無いところ（全部 404）は no-road。長すぎる区間は too-long', async () => {
-  const router = new Router(async () => null)
+test('Router: 道の無いところ（全部 404）は no-road。粗い経路が無い長い区間は no-route。100 km 超は too-long', async () => {
+  const router = new Router(async () => null, { coarseLoader: async () => null })
   const r = await router.routeLeg({ lat: 30, lng: 140 }, { lat: 30.01, lng: 140.01 }, OPTS)
   assert.equal(r.reason, 'no-road')
-  const long = await router.routeLeg({ lat: 35, lng: 139 }, { lat: 35.3, lng: 139.3 }, OPTS)
+  const mid = await router.routeLeg({ lat: 35, lng: 139 }, { lat: 35.3, lng: 139.3 }, OPTS)
+  assert.equal(mid.reason, 'no-route')
+  const long = await router.routeLeg({ lat: 35, lng: 139 }, { lat: 36, lng: 140 }, OPTS)
   assert.equal(long.reason, 'too-long')
+})
+
+test('Router: 粗い経路が無くても 12 km 以下なら 1 段階でやり直す', async () => {
+  // z12 は全部 404、z14 は保存した実タイル。タイルの中の 2 点（約 6 km 以上離す）
+  const router = new Router(fixtureLoader, { coarseLoader: async () => null })
+  const a0 = await router.snap(inFixture(0.05, 0.05), { ...OPTS, snap: { ...OPTS.snap, radius: 150 } })
+  const b0 = await router.snap(inFixture(0.95, 0.95), { ...OPTS, snap: { ...OPTS.snap, radius: 150 } })
+  assert.ok(a0 && b0)
+  assert.ok(distanceLL(a0, b0) > 2500)
+  const r = await router.routeLeg(a0, b0, OPTS)
+  assert.ok(r.status === 'ok' || r.reason === 'no-route', String(r.reason))
 })

@@ -6,7 +6,7 @@ import { EXTENT } from './geo.ts'
 import { roadClassOf, roadLevelOf, roadStructOf } from './roadClass.ts'
 import type { RoadTile, TileBytesLoader } from './types.ts'
 
-export const ROAD_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/experimental_bvmap/14/{x}/{y}.pbf'
+export const ROAD_TILE_URL = 'https://cyberjapandata.gsi.go.jp/xyz/experimental_bvmap/{z}/{x}/{y}.pbf'
 
 /** 折れ線（タイル内の座標）を、タイルの範囲 [0, E] × [0, E] で切る。切り口は四捨五入して整数にする */
 export function clipLine(pts: number[], E = EXTENT): number[][] {
@@ -96,14 +96,21 @@ export function decodeRoadTile(x: number, y: number, bytes: ArrayBuffer | Uint8A
   return buildRoadTile(x, y, lines)
 }
 
-/** 地理院のサーバーから取る loader。404 は null。ほかの失敗は例外 */
-export const fetchRoadTileBytes: TileBytesLoader = async (x, y, signal) => {
-  const url = ROAD_TILE_URL.replace('{x}', String(x)).replace('{y}', String(y))
-  const res = await fetch(url, { signal })
-  if (res.status === 404) return null
-  if (!res.ok) throw new Error(`道路タイルの取得に失敗しました: HTTP ${res.status} ${url}`)
-  return res.arrayBuffer()
+/** 地理院のサーバーから、ズーム zoom のタイルを取る loader。404 は null。ほかの失敗は例外 */
+export function makeRoadTileLoader(zoom: number): TileBytesLoader {
+  return async (x, y, signal) => {
+    const url = ROAD_TILE_URL.replace('{z}', String(zoom)).replace('{x}', String(x)).replace('{y}', String(y))
+    const res = await fetch(url, { signal })
+    if (res.status === 404) return null
+    if (!res.ok) throw new Error(`道路タイルの取得に失敗しました: HTTP ${res.status} ${url}`)
+    return res.arrayBuffer()
+  }
 }
+
+/** z14（経路の線を作るズーム） */
+export const fetchRoadTileBytes: TileBytesLoader = makeRoadTileLoader(14)
+/** z12（長い区間の粗い探索。§6.2） */
+export const fetchCoarseRoadTileBytes: TileBytesLoader = makeRoadTileLoader(12)
 
 function abortError(): Error {
   const e = new Error('aborted')
