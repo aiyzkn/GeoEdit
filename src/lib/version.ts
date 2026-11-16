@@ -1,5 +1,5 @@
 export const APP_NAME = 'GeoJSON / GPX / KML Editor'
-export const APP_VERSION = '1.0.2'
+export const APP_VERSION = '1.1.0'
 
 export interface ReleaseEntry {
   version: string
@@ -13,6 +13,19 @@ export interface ReleaseEntry {
  * セマンティックバージョニング: 互換性のない大規模更改.一般的な機能追加.バグフィックス
  */
 export const CHANGELOG: ReleaseEntry[] = [
+  {
+    version: '1.1.0',
+    date: '2026-11-17',
+    type: 'minor',
+    notes: [
+      'ルート作成に経路探索を追加。通過点の間を、道路に沿って自動で結ぶ（高速道路 ＞ 有料道路 ＞ 国道 ＞ 県道 ＞ 市区町村道 ＞ 里道の順に優先し、抜け道を通らない）',
+      '通過点のドラッグで前後の区間だけを引き直す。区間の線の上をドラッグすると通過点を差し込める。Ctrl（⌘）+ クリックの区間は直線',
+      '作成中の操作（追加・移動・差し込み・削除）を Ctrl+Z / Ctrl+Y で取り消し・やり直しできる',
+      '分離帯のある道路と高速道路の本線は、地理院地図（標準地図）の画像に合わせて、進む向きの左側の車道の中心を通す',
+      '経路探索の設定（優先の強さ・高速道路と有料道路の利用・寄せる距離・車線合わせ）をブラウザごとに保存',
+      '1 区間は直線距離 100 km まで。一方通行・右左折の規制は見ない（道路データに無い）',
+    ],
+  },
   {
     version: '1.0.2',
     date: '2026-07-28',
