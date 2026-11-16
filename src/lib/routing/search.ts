@@ -12,6 +12,17 @@ import type { GraphPos, SearchParams, SearchResult, SearchStep } from './types.t
 
 const S = 49
 
+/** 探索に要るグラフの項目。RoadGraph（z14）と CoarseGraph（z12。coarse.ts）の両方が満たす */
+export interface SearchGraph {
+  adj: number[][]
+  edgeA: number[]
+  edgeB: number[]
+  edgeLen: number[]
+  edgeCls: number[]
+  nodeLat: number[]
+  nodeLng: number[]
+}
+
 class MinHeap {
   private keys: number[] = []
   private vals: number[] = []
@@ -57,7 +68,7 @@ interface Prev { from: number; step: SearchStep; pen: number }
 interface Goal { cost: number; from: number; step: SearchStep; pen: number }
 
 export function search(
-  g: RoadGraph,
+  g: SearchGraph,
   from: GraphPos,
   to: GraphPos,
   p: SearchParams,
