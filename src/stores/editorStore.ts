@@ -1,9 +1,32 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
-import type { EditMode, UndoEntry, SelectionRange } from '@/types/editor'
+import type { EditMode, UndoEntry, SelectionRange, Draft } from '@/types/editor'
 import type { RouteData, TrackPoint } from '@/types/route'
+import { emptyDraft } from '@/lib/editors/draft'
+import { ROUTING_SETTINGS_KEY, sanitizeSettings, type RoutingSettings } from '@/lib/routing/settings'
 
 const MAX_UNDO = 50
+/** 作成中の下書きの取り消し履歴の上限（designs/経路探索詳細設計書.md §8.3） */
+const MAX_DRAFT_HISTORY = 100
+
+/** 利用者ごと（ブラウザごと）の経路探索の設定を読む（§11）。localStorage が無い環境（node:test）では既定値 */
+function loadRoutingSettings(): RoutingSettings {
+  try {
+    if (typeof localStorage === 'undefined') return sanitizeSettings(null)
+    const raw = localStorage.getItem(ROUTING_SETTINGS_KEY)
+    return sanitizeSettings(raw ? JSON.parse(raw) : null)
+  } catch {
+    return sanitizeSettings(null)
+  }
+}
+
+function saveRoutingSettings(s: RoutingSettings) {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(ROUTING_SETTINGS_KEY, JSON.stringify(s))
+  } catch {
+    // 保存できなくても、このページの中では設定が効く
+  }
+}
 
 export interface PartialEditState {
   routeId: string
@@ -19,8 +42,14 @@ interface EditorState {
   redoStack: UndoEntry[]
   selection: SelectionRange | null
   isBusy: boolean
-  createPoints: { lat: number; lng: number }[]
-  createRedoPoints: { lat: number; lng: number }[]
+  /** 作成中の下書き（通過点と区間）と、その取り消し・やり直しの履歴 */
+  draft: Draft
+  draftPast: Draft[]
+  draftFuture: Draft[]
+  /** 経路探索の設定（利用者ごと。localStorage に保存） */
+  routingSettings: RoutingSettings
+  /** 道路データの取得の進み具合（取得中だけ） */
+  routingProgress: { done: number; total: number } | null
   // 作成モードのマップマッチング（designs/マップマッチング設計書.md）。セッション内のみ保持
   mapMatchEnabled: boolean
   mergeTargetIds: [string | null, string | null]
@@ -35,12 +64,16 @@ interface EditorActions {
   setSelection: (sel: SelectionRange | null) => void
   toggleDeleteRangeMarker: (routeId: string, trackIndex: number, index: number) => void
   setBusy: (busy: boolean) => void
-  addCreatePoint: (lat: number, lng: number) => void
-  removeCreatePointAt: (index: number) => void
-  removeLastCreatePoint: () => void
-  redoCreatePoint: () => void
-  clearCreatePoints: () => void
-  moveCreatePointAt: (index: number, lat: number, lng: number) => void
+  /** 下書きを差し替える（履歴に積まない。探索の結果・ドラッグ中） */
+  setDraft: (d: Draft) => void
+  /** prev を履歴に積み、やり直しの履歴を空にする（操作の確定ごと） */
+  commitDraft: (prev: Draft) => void
+  /** 1 つ前の下書きに戻し、それを返す（無ければ null） */
+  undoDraft: () => Draft | null
+  redoDraft: () => Draft | null
+  clearDraft: () => void
+  setRoutingSettings: (patch: Partial<RoutingSettings>) => void
+  setRoutingProgress: (p: { done: number; total: number } | null) => void
   setMapMatchEnabled: (enabled: boolean) => void
   toggleMergeTarget: (routeId: string) => void
   startPartialEdit: (state: PartialEditState) => void
@@ -52,16 +85,16 @@ interface EditorActions {
 }
 
 /**
- * 作成モードに未確定ポイントがある状態でモードを離れると setMode() が createPoints を
+ * 作成モードに未確定ポイントがある状態でモードを離れると setMode() が下書き（draft）を
  * 破棄するため、離脱前にユーザーへ確認する共通ガード。破棄してよい（または確認不要）なら
  * true を返す。モード切替の入口（ツールバー・Escapeキー）で setMode の前に呼ぶこと。
- * 確定ボタンは clearCreatePoints() 後に setMode するためこのガードを通らない。
+ * 確定ボタンは clearDraft() 後に setMode するためこのガードを通らない。
  */
 export function confirmDiscardCreatePoints(): boolean {
-  const { mode, createPoints } = useEditorStore.getState()
-  if (mode !== 'create' || createPoints.length === 0) return true
+  const { mode, draft } = useEditorStore.getState()
+  if (mode !== 'create' || draft.anchors.length === 0) return true
   return window.confirm(
-    `作成中のルートには未確定のポイントが ${createPoints.length} 点あります。\n` +
+    `作成中のルートには未確定のポイントが ${draft.anchors.length} 点あります。\n` +
       '確定せずに移動するとポイントは破棄されます。破棄してよろしいですか？'
   )
 }
@@ -73,8 +106,11 @@ export const useEditorStore = create<EditorState & EditorActions>()(
     redoStack: [],
     selection: null,
     isBusy: false,
-    createPoints: [],
-    createRedoPoints: [],
+    draft: emptyDraft(),
+    draftPast: [],
+    draftFuture: [],
+    routingSettings: loadRoutingSettings(),
+    routingProgress: null,
     mapMatchEnabled: true,
     mergeTargetIds: [null, null],
     partialEdit: null,
@@ -86,8 +122,10 @@ export const useEditorStore = create<EditorState & EditorActions>()(
           state.selection = null
         }
         if (mode !== 'create') {
-          state.createPoints = []
-          state.createRedoPoints = []
+          state.draft = emptyDraft()
+          state.draftPast = []
+          state.draftFuture = []
+          state.routingProgress = null
         }
         if (mode !== 'merge') {
           state.mergeTargetIds = [null, null]
@@ -162,41 +200,62 @@ export const useEditorStore = create<EditorState & EditorActions>()(
         state.isBusy = busy
       }),
 
-    addCreatePoint: (lat, lng) =>
+    // 下書きは draft.ts の純粋関数で作った新しいオブジェクトに丸ごと差し替える（中を書き換えない）
+    setDraft: (d) =>
       set((state) => {
-        state.createPoints.push({ lat, lng })
-        state.createRedoPoints = []
+        state.draft = d
       }),
 
-    removeCreatePointAt: (index) =>
+    commitDraft: (prev) =>
       set((state) => {
-        state.createPoints.splice(index, 1)
+        state.draftPast.push(prev)
+        if (state.draftPast.length > MAX_DRAFT_HISTORY) state.draftPast.shift()
+        state.draftFuture = []
       }),
 
-    // Ctrl+Z（createモード時）・「1点削除」ボタン共通。末尾の1点を取り消し、
-    // Ctrl+Y で再度追加できるよう createRedoPoints に退避する
-    removeLastCreatePoint: () =>
+    undoDraft: () => {
+      const { draftPast, draft } = get()
+      if (draftPast.length === 0) return null
+      const prev = draftPast[draftPast.length - 1]
       set((state) => {
-        const removed = state.createPoints.pop()
-        if (removed) state.createRedoPoints.push(removed)
+        state.draftPast.pop()
+        state.draftFuture.push(draft)
+        state.draft = prev
+      })
+      return prev
+    },
+
+    redoDraft: () => {
+      const { draftFuture, draft } = get()
+      if (draftFuture.length === 0) return null
+      const next = draftFuture[draftFuture.length - 1]
+      set((state) => {
+        state.draftFuture.pop()
+        state.draftPast.push(draft)
+        state.draft = next
+      })
+      return next
+    },
+
+    clearDraft: () =>
+      set((state) => {
+        state.draft = emptyDraft()
+        state.draftPast = []
+        state.draftFuture = []
+        state.routingProgress = null
       }),
 
-    redoCreatePoint: () =>
+    setRoutingSettings: (patch) => {
+      const next = sanitizeSettings({ ...get().routingSettings, ...patch })
+      saveRoutingSettings(next)
       set((state) => {
-        const restored = state.createRedoPoints.pop()
-        if (restored) state.createPoints.push(restored)
-      }),
+        state.routingSettings = next
+      })
+    },
 
-    clearCreatePoints: () =>
+    setRoutingProgress: (p) =>
       set((state) => {
-        state.createPoints = []
-        state.createRedoPoints = []
-      }),
-
-    moveCreatePointAt: (index, lat, lng) =>
-      set((state) => {
-        const p = state.createPoints[index]
-        if (p) { p.lat = lat; p.lng = lng }
+        state.routingProgress = p
       }),
 
     setMapMatchEnabled: (enabled) =>

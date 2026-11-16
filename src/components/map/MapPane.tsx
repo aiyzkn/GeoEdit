@@ -8,7 +8,7 @@ import { useEditorStore } from '@/stores/editorStore'
 import { useDropZone } from '@/hooks/useDropZone'
 import { useKeyboard } from '@/hooks/useKeyboard'
 import { BASE_LAYERS, OVERLAY_LAYERS } from '@/lib/tileLayers'
-import { matchPoint } from '@/lib/mapMatch'
+import { addAnchorAt, cancelAll } from '@/lib/draftController'
 import { routeColor } from '@/lib/colors'
 import { baseZoomRange, baseTileZoomOptions, overlayTileZoomOptions, clampZoom } from '@/lib/zoomRange'
 import type { TileLayerDef } from '@/types/tile'
@@ -164,29 +164,21 @@ export default function MapPane() {
     })
   }, [activeOverlays])
 
-  // Add a point to the pending create-route when in create mode.
-  // 可能ならタイル画像解析で道路中心等へスナップする（designs/マップマッチング設計書.md）。
-  // タイル取得が非同期のため、連続クリック時も追加順がクリック順と一致するよう Promise 直列キューで処理する
+  // 作成モード: 地図のクリックで通過点を足す（designs/経路探索詳細設計書.md §8.4）。
+  // 経路探索が ON なら道へ寄せて前の通過点から道なりに結び、OFF なら画像のマップマッチングで補正する。
+  // Ctrl（macOS は Cmd）押下: 経路探索 ON ならその区間を直線に、OFF ならマッチングを飛ばす。
+  // 順序は draftController の直列キューが保つ
   useEffect(() => {
     const map = mapInstanceRef.current
     if (!map || mode !== 'create') return
-    let queue: Promise<void> = Promise.resolve()
     const handleClick = (e: L.LeafletMouseEvent) => {
-      const latlng = e.latlng
-      // Ctrl（macOS は Cmd）押下クリックはマッチングを一時スキップ
-      const skipMatch =
-        e.originalEvent.ctrlKey ||
-        e.originalEvent.metaKey ||
-        !useEditorStore.getState().mapMatchEnabled
-      const baseLayerId = useMapStore.getState().baseLayerId
-      queue = queue.then(async () => {
-        const p = skipMatch ? latlng : await matchPoint({ map, latlng, baseLayerId })
-        useEditorStore.getState().addCreatePoint(p.lat, p.lng)
-      })
+      const straight = e.originalEvent.ctrlKey || e.originalEvent.metaKey
+      addAnchorAt(map, { lat: e.latlng.lat, lng: e.latlng.lng }, { straight })
     }
     map.on('click', handleClick)
     return () => {
       map.off('click', handleClick)
+      cancelAll()
     }
   }, [mode])
 

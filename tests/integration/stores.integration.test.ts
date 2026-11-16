@@ -14,6 +14,7 @@ import { useRouteStore } from '../../src/stores/routeStore.ts'
 import { useEditorStore } from '../../src/stores/editorStore.ts'
 import { useMapStore } from '../../src/stores/mapStore.ts'
 import type { RouteData } from '../../src/types/route.ts'
+import { addAnchor, emptyDraft } from '../../src/lib/editors/draft.ts'
 
 let uid = 0
 function makeRoute(name: string): RouteData {
@@ -36,7 +37,7 @@ beforeEach(() => {
   })
   useEditorStore.setState({
     mode: 'none', undoStack: [], redoStack: [], selection: null, isBusy: false,
-    createPoints: [], createRedoPoints: [], mergeTargetIds: [null, null], partialEdit: null,
+    draft: emptyDraft(), draftPast: [], draftFuture: [], mergeTargetIds: [null, null], partialEdit: null,
   })
   useMapStore.setState({ baseLayerId: 'gsi-pale', activeOverlays: [], showElevation: true })
 })
@@ -154,39 +155,52 @@ test('Undo: スナップショットは structuredClone され、後続変更の
   assert.equal(useEditorStore.getState().undoStack[0].snapshot[0].name, 'A')
 })
 
-// ── 作成モードのポイント操作 ────────────────────────────────────────────
-test('createPoints: 追加・末尾取り消し・やり直しが連動する', () => {
+// ── 作成モードの下書きの履歴（designs/経路探索詳細設計書.md §8.3）──────────────
+function addPoint(lat: number, lng: number) {
   const ed = useEditorStore.getState()
-  ed.addCreatePoint(35, 139)
-  ed.addCreatePoint(35.1, 139.1)
-  ed.addCreatePoint(35.2, 139.2)
-  assert.equal(useEditorStore.getState().createPoints.length, 3)
+  const prev = ed.draft
+  ed.commitDraft(prev)
+  ed.setDraft(addAnchor(prev, { id: `p${lat}`, lat, lng }, 'straight'))
+}
 
-  ed.removeLastCreatePoint() // 末尾を redo バッファへ
-  assert.equal(useEditorStore.getState().createPoints.length, 2)
-  assert.equal(useEditorStore.getState().createRedoPoints.length, 1)
+test('draft: 追加・取り消し・やり直しが連動する', () => {
+  addPoint(35, 139)
+  addPoint(35.1, 139.1)
+  addPoint(35.2, 139.2)
+  assert.equal(useEditorStore.getState().draft.anchors.length, 3)
 
-  ed.redoCreatePoint()
-  assert.equal(useEditorStore.getState().createPoints.length, 3)
-  assert.equal(useEditorStore.getState().createRedoPoints.length, 0)
+  useEditorStore.getState().undoDraft()
+  assert.equal(useEditorStore.getState().draft.anchors.length, 2)
+  assert.equal(useEditorStore.getState().draftFuture.length, 1)
+
+  useEditorStore.getState().redoDraft()
+  assert.equal(useEditorStore.getState().draft.anchors.length, 3)
+  assert.equal(useEditorStore.getState().draftFuture.length, 0)
+  assert.equal(useEditorStore.getState().redoDraft(), null)
 })
 
-test('createPoints: 新規追加で redo バッファがクリアされる', () => {
-  const ed = useEditorStore.getState()
-  ed.addCreatePoint(0, 0)
-  ed.removeLastCreatePoint()
-  assert.equal(useEditorStore.getState().createRedoPoints.length, 1)
-  ed.addCreatePoint(1, 1)
-  assert.equal(useEditorStore.getState().createRedoPoints.length, 0)
+test('draft: 新しい操作でやり直しの履歴が消える', () => {
+  addPoint(0, 0)
+  useEditorStore.getState().undoDraft()
+  assert.equal(useEditorStore.getState().draftFuture.length, 1)
+  addPoint(1, 1)
+  assert.equal(useEditorStore.getState().draftFuture.length, 0)
+})
+
+test('routingSettings: 範囲外の値は丸めて保存する（node では localStorage が無くても動く）', () => {
+  useEditorStore.getState().setRoutingSettings({ snapRadiusM: 1000, preset: 'shortest' })
+  assert.equal(useEditorStore.getState().routingSettings.snapRadiusM, 100)
+  assert.equal(useEditorStore.getState().routingSettings.preset, 'shortest')
+  useEditorStore.getState().setRoutingSettings({ snapRadiusM: 30, preset: 'standard' })
 })
 
 // ── setMode の副作用（一時状態のクリア）─────────────────────────────────
-test('setMode: create 以外へ移ると createPoints がクリアされる', () => {
-  const ed = useEditorStore.getState()
-  ed.setMode('create')
-  ed.addCreatePoint(0, 0)
+test('setMode: create 以外へ移ると下書きと履歴がクリアされる', () => {
+  useEditorStore.getState().setMode('create')
+  addPoint(0, 0)
   useEditorStore.getState().setMode('none')
-  assert.equal(useEditorStore.getState().createPoints.length, 0)
+  assert.equal(useEditorStore.getState().draft.anchors.length, 0)
+  assert.equal(useEditorStore.getState().draftPast.length, 0)
 })
 
 test('setMode: merge 以外へ移ると mergeTargetIds がクリアされる', () => {
