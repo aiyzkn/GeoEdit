@@ -181,6 +181,9 @@ export async function serveLeafletCss(page: Page) {
 export async function zoomIn(page: Page, times: number) {
   for (let i = 0; i < times; i++) {
     await page.locator('.leaflet-control-zoom-in').click()
+    // アニメーションの途中で次を押すと取りこぼすので、終わるのを待つ（Leaflet の既定は 250 ms）
+    await page.waitForTimeout(350)
+    await expect(page.locator('.leaflet-zoom-anim')).toHaveCount(0)
   }
 }
 

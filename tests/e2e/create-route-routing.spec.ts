@@ -4,7 +4,7 @@
  * 道路タイルは serveRoadTiles() で保存した実タイルに差し替える。
  * 途中の状態は、区間の線の色（SVG の stroke）で見る:
  *   実線の青 #2563eb = 経路探索で結んだ / 薄い青 #93c5fd = 探索中 / 橙 #f59e0b = 探索できず直線
- * 線の点の数は地図からは読みにくいので、確定後のトーストの「N ポイント」で確かめる。
+ * 線の点の数は地図からは読みにくいので、確定後のルート一覧の「N pts」で確かめる。
  */
 import type { Page } from '@playwright/test'
 import { test, expect, mockExternalNetwork, selectMode, serveLeafletCss, serveRoadTiles, zoomIn } from './helpers'
@@ -29,12 +29,12 @@ async function startCreate(page: Page) {
   await expect(page.getByRole('checkbox', { name: '経路探索' })).toBeChecked()
 }
 
+/** 確定して、できたルートの点の数を、ルート一覧の「N pts · 1 trk」から読む（トーストは 4 秒で消えるので使わない） */
 async function createdPointCount(page: Page): Promise<number> {
   await page.getByRole('button', { name: '確定' }).click()
-  const toast = page.getByText(/ルートを作成しました（\d+ ポイント）/)
-  await expect(toast).toBeVisible()
-  const m = (await toast.textContent())!.match(/（(\d+) ポイント）/)
-  return Number(m![1])
+  const row = page.getByText(/^\d+ pts · 1 trk$/)
+  await expect(row).toBeVisible()
+  return Number((await row.textContent())!.match(/^(\d+) pts/)![1])
 }
 
 test.describe('道路タイルあり', () => {
