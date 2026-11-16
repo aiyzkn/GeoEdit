@@ -1,11 +1,29 @@
 // タイル → 道路グラフ（詳細設計書 §3.3・§3.4）。足していくだけのグラフ。
 
-import { EXTENT, haversine, worldToLatLng } from './geo.ts'
+import { EXTENT, haversine, metersPerUnit, worldToLatLng } from './geo.ts'
 import type { LatLng, RoadTile } from './types.ts'
 
 const KEY_MUL = 2 ** 26
 const CELL = 256 // 空間索引のマス（格子。z14 で約 120 m）
 const CELL_MUL = 2 ** 20
+
+/** 一方通行の推定と、高速道路での曲がり方の値（§14） */
+export const ONEWAY = {
+  /** 相手の線を探す距離（高速 / 分離帯のある一般道） */
+  reachMotorwayM: 45,
+  reachDividedM: 30,
+  /** これより近い線は、相手とみなさない（同じ線の重なりなど） */
+  minGapM: 3,
+  /** 平行とみなす角度（cos 25°） */
+  parallelCos: 0.906,
+  /** 高速道路どうしで進める角度の上限（cos 100°。これより鋭い折り返しは禁止） */
+  maxTurnCos: -0.17,
+  /** 本線とランプの間で、左への分岐・合流とみなす: 右へこれ以下のずれ（sin 3°）は直進として許す。角度は 75° まで */
+  straightSin: 0.05,
+  rampMinCos: 0.26,
+  /** 右側のランプ（反対向きの車線のランプと見られる）を使うときの罰則（m 相当） */
+  wrongSideRampM: 5000,
+} as const
 
 function nodeKey(x: number, y: number): number {
   return x * KEY_MUL + y
@@ -40,6 +58,8 @@ export class RoadGraph {
   /** マス → [辺, 線分の番号（形の中の k。点 k-1 → k）] の並び */
   private readonly cells = new Map<number, number[]>()
   private readonly cumCache = new Map<number, Float64Array>()
+  /** 辺 → [一方通行の向き, 求めたときのタイルの枚数]。タイルが増えたら求め直す（隣のタイルに相手の線があることがある） */
+  private readonly onewayCache = new Map<number, [number, number]>()
 
   get edgeCount(): number {
     return this.edgeA.length
@@ -213,6 +233,124 @@ export class RoadGraph {
     }
     pts.push(this.pointAt(e, Math.max(t0, t1)))
     return t0 > t1 ? pts.reverse() : pts
+  }
+
+  /** 辺 e の、a からの道のりの割合 t の点と、その点での進む向き（a → b。単位ベクトル。世界座標） */
+  private pointAndTangent(e: number, t: number): [number, number, number, number] {
+    const cum = this.cumulative(e)
+    const n = cum.length
+    const target = Math.max(0, Math.min(1, t)) * cum[n - 1]
+    let k = 1
+    while (k < n - 1 && cum[k] < target) k++
+    const [ax, ay] = this.shapePoint(e, k - 1)
+    const [bx, by] = this.shapePoint(e, k)
+    const seg = cum[k] - cum[k - 1]
+    const f = seg > 0 ? (target - cum[k - 1]) / seg : 0
+    const L = Math.hypot(bx - ax, by - ay) || 1
+    return [ax + (bx - ax) * f, ay + (by - ay) * f, (bx - ax) / L, (by - ay) / L]
+  }
+
+  /**
+   * 一方通行の向きを推定する（§14）: 1 = a → b だけ、-1 = b → a だけ、0 = 両方向（分からない）。
+   * タイルに一方通行の属性は無いが、高速道路と分離帯のある道路は、上下線が別々の線になっていることがある。
+   * 近くに平行な相手の線があれば、日本は左側通行なので「相手の線が右側に来る向き」だけを通れるとする。
+   * 両側に平行な線がある（ランプ・側道が並ぶ）所は決めない
+   */
+  oneway(e: number): number {
+    const hit = this.onewayCache.get(e)
+    if (hit && hit[1] === this.tiles.length) return hit[0]
+    const v = this.computeOneway(e)
+    this.onewayCache.set(e, [v, this.tiles.length])
+    return v
+  }
+
+  private computeOneway(e: number): number {
+    const cls = this.edgeCls[e]
+    const isMw = cls === 6
+    // 対象: 分離帯のある線（上下線が別々の線になっている本線・一般道）。ランプ（高速で分離帯なし）は向きを決めない
+    if (!this.edgeMed[e]) return 0
+    if (this.edgeLen[e] < 5) return 0
+    const mpu = metersPerUnit(this.nodeLat[this.edgeA[e]])
+    const reach = (isMw ? ONEWAY.reachMotorwayM : ONEWAY.reachDividedM) / mpu
+    const minGap = ONEWAY.minGapM / mpu
+    let votes = 0, samples = 0
+    for (const t of [0.25, 0.5, 0.75]) {
+      const [px, py, tx, ty] = this.pointAndTangent(e, t)
+      const near = this.segmentsNear(px - reach, py - reach, px + reach, py + reach)
+      let left = false, right = false
+      for (let i = 0; i < near.length; i += 2) {
+        const o = near[i], k = near[i + 1]
+        if (o === e) continue
+        // 相手は、同じ階級で、同じ種類の線（本線どうし = 分離帯あり、ランプどうし = 分離帯なし）。
+        // 本線の横を並んで走るランプを「反対向きの車線」と取り違えないため
+        if (this.edgeCls[o] !== cls || this.edgeMed[o] !== this.edgeMed[e]) continue
+        // つながっている線（分岐・合流の直後で並んでいるだけ）は相手にしない
+        if (this.sharesNode(e, o)) continue
+        const [ax, ay] = this.shapePoint(o, k - 1)
+        const [bx, by] = this.shapePoint(o, k)
+        const dx = bx - ax, dy = by - ay
+        const L = Math.hypot(dx, dy)
+        if (L === 0) continue
+        if (Math.abs((dx * tx + dy * ty) / L) < ONEWAY.parallelCos) continue // 平行でない
+        // p から進む向きに直交する線を引いて、相手の線分と交わる所
+        const f = ((px - ax) * dx + (py - ay) * dy) / (L * L)
+        if (f < 0 || f > 1) continue
+        const qx = ax + dx * f - px, qy = ay + dy * f - py
+        const along = qx * tx + qy * ty
+        const side = qx * ty - qy * tx // 画面の座標（y が下向き）で、正 = 進む向きの左
+        const dist = Math.abs(side)
+        if (dist < minGap || dist > reach || Math.abs(along) > dist) continue
+        if (side > 0) left = true
+        else right = true
+      }
+      if (left === right) continue // どちらにも無い・両側にある
+      samples++
+      votes += right ? 1 : -1
+    }
+    if (samples === 0 || Math.abs(votes) !== samples) return 0 // 点によって結果が割れた
+    return votes > 0 ? 1 : -1
+  }
+
+  /** 2 つの辺が、同じノードでじかにつながっているか（分岐・合流の直後で並んでいるだけの線） */
+  private sharesNode(e: number, o: number): boolean {
+    return this.adj[this.edgeA[e]].includes(o) || this.adj[this.edgeB[e]].includes(o)
+  }
+
+  /** 辺 e を dir（0 = a → b、1 = b → a）の向きに通るときの、端（'in' = 入る側、'out' = 出る側）での進む向き */
+  private heading(e: number, dir: number, end: 'in' | 'out'): [number, number] {
+    const n = this.shapeLength(e)
+    // 端から 8 格子（約 4 m）以上離れた最初の点までの向き（端の短い線分の向きの乱れを避ける）
+    const fromStart = (dir === 0) === (end === 'in')
+    const [x0, y0] = this.shapePoint(e, fromStart ? 0 : n - 1)
+    let x1 = x0, y1 = y0
+    for (let i = 1; i < n; i++) {
+      ;[x1, y1] = this.shapePoint(e, fromStart ? i : n - 1 - i)
+      if (Math.hypot(x1 - x0, y1 - y0) >= 8) break
+    }
+    const L = Math.hypot(x1 - x0, y1 - y0) || 1
+    const sx = (x1 - x0) / L, sy = (y1 - y0) / L
+    // 'in' は端から中へ向かう向き = 進む向き。'out' は端へ向かう向き = 進む向きなので、逆にする
+    return end === 'in' ? [sx, sy] : [-sx, -sy]
+  }
+
+  /**
+   * 辺 e1 のあとに辺 e2 へ進むときに足すコスト（§14）。高速道路どうしのつなぎ目だけを見る。
+   * - 折り返し・鋭い角度（100° 超）は進めない（本線での U ターン、ランプの逆走を防ぐ）
+   * - 本線（分離帯のある 1 本の線。上下線を兼ねる）とランプ（分離帯の無い線）の間は、
+   *   日本は左側通行なので「浅い角度の左への分岐・左からの合流」だけが正しい。
+   *   右への分岐・右からの合流は、反対向きの車線のランプなので、大きな罰則を足す
+   *   （右側に出入口がある所もあるので、禁止にはしない）
+   */
+  turnCost(e1: number, dir1: number, e2: number, dir2: number): number {
+    if (this.edgeCls[e1] !== 6 || this.edgeCls[e2] !== 6) return 0
+    if (e1 === e2) return Infinity
+    const [ax, ay] = this.heading(e1, dir1, 'out')
+    const [bx, by] = this.heading(e2, dir2, 'in')
+    const dot = ax * bx + ay * by
+    if (dot < ONEWAY.maxTurnCos) return Infinity
+    if (this.edgeMed[e1] === this.edgeMed[e2]) return 0 // 本線どうし・ランプどうし
+    const left = bx * ay - by * ax // 画面の座標（y が下向き）で、正 = 左へ曲がる
+    return left >= -ONEWAY.straightSin && dot >= ONEWAY.rampMinCos ? 0 : ONEWAY.wrongSideRampM
   }
 
   /** 世界座標の矩形にかかる [辺, 線分の番号] の並び（重複あり） */
