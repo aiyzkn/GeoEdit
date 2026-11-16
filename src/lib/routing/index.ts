@@ -119,7 +119,9 @@ export class Router {
     // 分離帯のある辺に挟まれた短い辺（交差点の中など。属性が分離帯なしになっている）も、同じ区間に入れる
     const steps = res.steps.filter((st) => st.from !== st.to)
     const lenOf = (st: (typeof steps)[number]) => Math.abs(st.to - st.from) * g.edgeLen[st.edge]
-    const med = steps.map((st) => g.edgeMed[st.edge] === 1)
+    // 対象は、分離帯のある 1 本の線だけ。高速道路と、上下線が別々の線になっている道路（一方通行と推定できた辺）は、
+    // 線がすでに車道ごとにあるので合わせない（合わせると、注記などで線が振れる。§14）
+    const med = steps.map((st) => g.edgeMed[st.edge] === 1 && g.edgeCls[st.edge] !== 6 && g.oneway(st.edge) === 0)
     for (let i = 0; i < steps.length; i++) {
       if (med[i]) continue
       let j = i, len = 0

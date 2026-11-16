@@ -1,6 +1,7 @@
 // 階級つきの最短経路探索（詳細設計書 §4）。純粋関数。
 //
-// 状態 = (ノード, 直前の辺の階級 c, これまでの最高の階級 top)。
+// 状態 = (向きつきの辺, これまでの最高の階級 top)。直前の辺の階級 c は辺から決まる。
+// 向きつきの辺を状態にするのは、一方通行と「高速道路での折り返しの禁止」を正しく扱うため（§14）。
 // 辺（階級 c'）へ進むコスト = 長さ × weight[c'] + 罰則。
 //   lo = max(c, valleyFloor), hi = min(top, c')
 //   罰則 = hi > lo ? valley × (hi − lo) : 0       ← 谷の深さで罰する（行きと帰りで同じ結果になる）
@@ -10,7 +11,6 @@ import { haversine } from './geo.ts'
 import type { RoadGraph } from './graph.ts'
 import type { GraphPos, SearchParams, SearchResult, SearchStep } from './types.ts'
 
-const S = 49
 
 /** 探索に要るグラフの項目。RoadGraph（z14）と CoarseGraph（z12。coarse.ts）の両方が満たす */
 export interface SearchGraph {
@@ -21,6 +21,10 @@ export interface SearchGraph {
   edgeCls: number[]
   nodeLat: number[]
   nodeLng: number[]
+  /** 一方通行: 1 = a → b だけ、-1 = b → a だけ、0 = 両方向。無ければ全部 両方向 */
+  oneway?(e: number): number
+  /** 辺 e1 を dir1 の向きに通ったあと、辺 e2 を dir2 の向きに進むときに足すコスト（m 相当。Infinity = 進めない。向きは 0 = a → b、1 = b → a）。無ければ 0 */
+  turnCost?(e1: number, dir1: number, e2: number, dir2: number): number
 }
 
 class MinHeap {
@@ -82,14 +86,19 @@ export function search(
   const c0 = g.edgeCls[e0], cG = g.edgeCls[eG]
   if (c0 > p.maxClass || cG > p.maxClass) return null
   const L0 = g.edgeLen[e0], LG = g.edgeLen[eG]
-  const aG = g.edgeA[eG], bG = g.edgeB[eG]
 
+  // 状態 = (向きつきの辺, これまでの最高の階級)。辺の番号 × 2 + 向き（0 = a → b、1 = b → a）
   const best = new Map<number, number>()
   const prev = new Map<number, Prev>()
   const closed = new Set<number>()
   const goals: Goal[] = []
   const heap = new MinHeap()
   const h = (n: number) => haversine(g.nodeLat[n], g.nodeLng[n], to.lat, to.lng) * minW
+  /** 辺 e を dir の向きに通れるか（一方通行。上下線が別の線になっている道路） */
+  const allowed = (e: number, dir: number) => {
+    const ow = g.oneway ? g.oneway(e) : 0
+    return ow === 0 || (ow > 0) === (dir === 0)
+  }
 
   const relax = (state: number, node: number, cost: number, pr: Prev) => {
     const b = best.get(state)
@@ -103,12 +112,13 @@ export function search(
     heap.push(goal.cost, -goals.length)
   }
 
-  // 始点: 寄せた辺の両端へ
-  const st0 = c0 * 7 + c0
-  relax(g.edgeA[e0] * S + st0, g.edgeA[e0], from.t * L0 * W[c0], { from: -1, step: { edge: e0, from: from.t, to: 0 }, pen: 0 })
-  relax(g.edgeB[e0] * S + st0, g.edgeB[e0], (1 - from.t) * L0 * W[c0], { from: -1, step: { edge: e0, from: from.t, to: 1 }, pen: 0 })
+  // 始点: 寄せた辺を、両方の向きへ（通れる向きだけ）
+  if (allowed(e0, 1)) relax((e0 * 2 + 1) * 7 + c0, g.edgeA[e0], from.t * L0 * W[c0], { from: -1, step: { edge: e0, from: from.t, to: 0 }, pen: 0 })
+  if (allowed(e0, 0)) relax((e0 * 2) * 7 + c0, g.edgeB[e0], (1 - from.t) * L0 * W[c0], { from: -1, step: { edge: e0, from: from.t, to: 1 }, pen: 0 })
   // 始点と終点が同じ辺の上
-  if (e0 === eG) pushGoal({ cost: Math.abs(to.t - from.t) * L0 * W[c0], from: -1, step: { edge: e0, from: from.t, to: to.t }, pen: 0 })
+  if (e0 === eG && (to.t === from.t || allowed(e0, to.t > from.t ? 0 : 1))) {
+    pushGoal({ cost: Math.abs(to.t - from.t) * L0 * W[c0], from: -1, step: { edge: e0, from: from.t, to: to.t }, pen: 0 })
+  }
 
   let expanded = 0
   let found: Goal | null = null
@@ -118,29 +128,34 @@ export function search(
     if (closed.has(v)) continue
     closed.add(v)
     const gCost = best.get(v)!
-    const node = Math.floor(v / S)
-    const r = v % S
-    const c = Math.floor(r / 7), top = r % 7
+    const de = Math.floor(v / 7), top = v % 7
+    const e1 = de >> 1, dir1 = de & 1
+    const c = g.edgeCls[e1]
+    const node = dir1 === 0 ? g.edgeB[e1] : g.edgeA[e1]
     if (++expanded > p.maxExpand) return null
     if (expanded % 500 === 0 && shouldStop?.()) return null
-
-    // 終点の辺へ入る
-    if (node === aG || node === bG) {
-      const pen = valleyPenalty(c, top, cG, p)
-      if (node === aG) pushGoal({ cost: gCost + to.t * LG * W[cG] + pen, from: v, step: { edge: eG, from: 0, to: to.t }, pen })
-      if (node === bG) pushGoal({ cost: gCost + (1 - to.t) * LG * W[cG] + pen, from: v, step: { edge: eG, from: 1, to: to.t }, pen })
-    }
 
     for (const e of g.adj[node]) {
       const ce = g.edgeCls[e]
       if (ce > p.maxClass) continue
-      const forward = g.edgeA[e] === node
-      const next = forward ? g.edgeB[e] : g.edgeA[e]
-      const pen = valleyPenalty(c, top, ce, p)
-      const ntop = Math.max(top, ce)
-      relax(next * S + ce * 7 + ntop, next, gCost + g.edgeLen[e] * W[ce] + pen, {
-        from: v, step: { edge: e, from: forward ? 0 : 1, to: forward ? 1 : 0 }, pen,
-      })
+      // 両端が同じノードの辺（輪）は、a → b の向きだけで扱う
+      const dirs = g.edgeA[e] === g.edgeB[e] ? [0] : [g.edgeA[e] === node ? 0 : 1]
+      for (const dir of dirs) {
+        if (!allowed(e, dir)) continue
+        const turn = g.turnCost ? g.turnCost(e1, dir1, e, dir) : 0
+        if (turn === Infinity) continue
+        const next = dir === 0 ? g.edgeB[e] : g.edgeA[e]
+        const pen = valleyPenalty(c, top, ce, p)
+        const ntop = Math.max(top, ce)
+        // 終点の辺へ入る
+        if (e === eG) {
+          const part = dir === 0 ? to.t : 1 - to.t
+          pushGoal({ cost: gCost + part * LG * W[cG] + pen + turn, from: v, step: { edge: eG, from: dir === 0 ? 0 : 1, to: to.t }, pen })
+        }
+        relax((e * 2 + dir) * 7 + ntop, next, gCost + g.edgeLen[e] * W[ce] + pen + turn, {
+          from: v, step: { edge: e, from: dir === 0 ? 0 : 1, to: dir === 0 ? 1 : 0 }, pen,
+        })
+      }
     }
   }
   if (!found) return null
