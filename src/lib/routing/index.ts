@@ -1,9 +1,10 @@
 // 経路探索の公開 API（詳細設計書 §7.1）。DOM・Leaflet に依存しない。
 
-import { planLeg, tilesAroundSegment, CORRIDOR } from './corridor.ts'
-import { distanceLL, pathDistance, round7 } from './geo.ts'
+import { directRadius, planLeg, tilesAroundSegment, tilesAroundWorldSegment, CORRIDOR } from './corridor.ts'
+import { buildCoarseGraph, coarsePath, COARSE_ZOOM, type CoarseGraph } from './coarse.ts'
+import { distanceLL, metersPerUnit, pathDistance, round7 } from './geo.ts'
 import { RoadGraph } from './graph.ts'
-import { fetchRoadTileBytes, isAbortError, RoadTileCache } from './roadTiles.ts'
+import { fetchCoarseRoadTileBytes, fetchRoadTileBytes, isAbortError, RoadTileCache } from './roadTiles.ts'
 import { search, stepsToPoints } from './search.ts'
 import { snapToGraph } from './snap.ts'
 import type { FallbackReason, GraphPos, LatLng, RouteResult, RoutingOptions, TileBytesLoader } from './types.ts'
@@ -14,6 +15,13 @@ export type { FallbackReason, LatLng, RouteResult, RoutingOptions } from './type
 const MAX_GRAPH_EDGES = 1_500_000
 /** 置いた位置から道が遠いとき（snap.radius 以内に道が無いとき）に、直線で結んでよい距離（§5） */
 const CONNECT_RADIUS_M = 300
+/** 粗いグラフ（z12）を取る範囲: 始点–終点の線分から max(10 km, 0.25 × 直線距離) */
+const COARSE_MARGIN_MIN_M = 10_000
+const COARSE_MARGIN_RATIO = 0.25
+/** 粗いグラフを覚えておく数（ドラッグ中に作り直さないため） */
+const COARSE_GRAPH_CACHE = 4
+
+type TileKey = { x: number; y: number }
 
 type Progress = (done: number, total: number) => void
 
@@ -28,10 +36,16 @@ function same(a: LatLng, b: LatLng): boolean {
 
 export class Router {
   private readonly cache: RoadTileCache
+  private readonly coarseCache: RoadTileCache
+  private readonly coarseGraphs = new Map<string, CoarseGraph>()
   private graph = new RoadGraph()
 
-  constructor(loader: TileBytesLoader = fetchRoadTileBytes, opts: { cacheTiles?: number; concurrency?: number } = {}) {
+  constructor(
+    loader: TileBytesLoader = fetchRoadTileBytes,
+    opts: { cacheTiles?: number; concurrency?: number; coarseLoader?: TileBytesLoader } = {},
+  ) {
     this.cache = new RoadTileCache(loader, { max: opts.cacheTiles, concurrency: opts.concurrency })
+    this.coarseCache = new RoadTileCache(opts.coarseLoader ?? fetchCoarseRoadTileBytes, { max: 400, concurrency: opts.concurrency })
   }
 
   /** 置いた位置を、近くの道へ寄せる。道が無ければ null（例外は投げない） */
@@ -51,7 +65,17 @@ export class Router {
     const plan = planLeg(d)
     if (plan.kind === 'too-long') return fallback(from, to, 'too-long')
     try {
-      const tiles = tilesAroundSegment(from, to, plan.radiusM)
+      let tiles: TileKey[] | null
+      if (plan.kind === 'direct') {
+        tiles = tilesAroundSegment(from, to, plan.radiusM)
+      } else {
+        // 2 段階（§6.2）: 粗い経路のまわりの回廊。見つからなければ、短い区間は 1 段階でやり直す
+        tiles = await this.corridorTiles(from, to, d, options, signal)
+        if (!tiles) {
+          if (d > CORRIDOR.retryDirectMaxKm * 1000) return fallback(from, to, signal?.aborted ? 'aborted' : 'no-route')
+          tiles = tilesAroundSegment(from, to, directRadius(d))
+        }
+      }
       // 点のまわりも（道まで遠いときの接続のため）
       for (const p of [from, to]) for (const t of tilesAroundSegment(p, p, CORRIDOR.pointRadiusM)) tiles.push(t)
       await this.ensureTiles(dedupeTiles(tiles), signal, onProgress)
@@ -84,6 +108,52 @@ export class Router {
     return { status: 'ok', points: pts, distance: pathDistance(pts) }
   }
 
+  /**
+   * 2 段階の 1 段目: z12 の粗いグラフで経路の見当をつけ、そのまわりの z14 のタイルを返す（§6.2）。
+   * 高速を使える設定のときは「高速なし」でも探索し、両方の経路を回廊に入れる。経路が無ければ null
+   */
+  private async corridorTiles(from: LatLng, to: LatLng, d: number, options: RoutingOptions, signal?: AbortSignal): Promise<TileKey[] | null> {
+    const margin = Math.max(COARSE_MARGIN_MIN_M, COARSE_MARGIN_RATIO * d)
+    const keys = dedupeTiles(tilesAroundSegment(from, to, margin, COARSE_ZOOM))
+    const g = await this.coarseGraph(keys, signal)
+    const variants = [options.params]
+    if (options.params.maxClass > 4) variants.push({ ...options.params, maxClass: 4 })
+    const paths: number[][] = []
+    for (const params of variants) {
+      const p = coarsePath(g, from, to, params, () => signal?.aborted === true)
+      if (p) paths.push(p)
+    }
+    if (paths.length === 0) return null
+    const r = CORRIDOR.bufferM / metersPerUnit((from.lat + to.lat) / 2)
+    const out: TileKey[] = []
+    for (const pts of paths) {
+      for (let i = 2; i < pts.length; i += 2) {
+        for (const t of tilesAroundWorldSegment(pts[i - 2], pts[i - 1], pts[i], pts[i + 1], r)) out.push(t)
+      }
+    }
+    for (const p of [from, to]) for (const t of tilesAroundSegment(p, p, CORRIDOR.endRadiusM)) out.push(t)
+    return out
+  }
+
+  private async coarseGraph(keys: TileKey[], signal?: AbortSignal): Promise<CoarseGraph> {
+    const id = keys.map((k) => `${k.x}/${k.y}`).sort().join(',')
+    const hit = this.coarseGraphs.get(id)
+    if (hit) {
+      this.coarseGraphs.delete(id)
+      this.coarseGraphs.set(id, hit)
+      return hit
+    }
+    const tiles = await this.coarseCache.getMany(keys, signal)
+    const g = buildCoarseGraph(tiles)
+    this.coarseGraphs.set(id, g)
+    while (this.coarseGraphs.size > COARSE_GRAPH_CACHE) {
+      const oldest = this.coarseGraphs.keys().next().value
+      if (oldest === undefined) break
+      this.coarseGraphs.delete(oldest)
+    }
+    return g
+  }
+
   /** snap.radius 以内の道へ。無ければ 300 m 以内の道へ（その間は直線で結ぶ）。それも無ければ null */
   private snapForRoute(p: LatLng, options: RoutingOptions): GraphPos | null {
     return snapToGraph(this.graph, p.lat, p.lng, options.snap)
@@ -108,7 +178,7 @@ export class Router {
   }
 }
 
-function dedupeTiles(keys: { x: number; y: number }[]): { x: number; y: number }[] {
+function dedupeTiles(keys: TileKey[]): TileKey[] {
   const seen = new Set<string>()
   const out: { x: number; y: number }[] = []
   for (const k of keys) {
