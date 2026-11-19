@@ -368,8 +368,8 @@ export default function EditModePanel() {
       }
       newRoute = { id: crypto.randomUUID(), name, trackName: createTrackName.trim() || undefined, startTime, endTime }
     }
-    if (target.kind === 'replace') {
-      // 区間の中のウェイポイントは消える（B1）
+    if (target.kind === 'replace' && !target.match) {
+      // 区間の中のウェイポイントは消える（B1）。道に合わせた下書きは、最寄りの点へ移すので消えない（§8.2）
       const tp = routes.find((r) => r.id === target.routeId)?.tracks[target.trackIndex]?.points ?? []
       const n = countWaypointsInRange(tp, target.startIndex, target.endIndex)
       if (n > 0) {
@@ -410,7 +410,9 @@ export default function EditModePanel() {
       addToast('success', `ルートを作成しました（${result.addedPoints} ポイント）`)
     } else {
       useRouteStore.getState().setRoutes(result.routes)
-      addToast('success', target.kind === 'append' ? `ルートに追記しました（${result.addedPoints} ポイント）` : `道なりに引き直しました（${result.addedPoints} ポイント）`)
+      addToast('success', target.kind === 'append' ? `ルートに追記しました（${result.addedPoints} ポイント）`
+        : target.kind === 'replace' && target.match ? `道に合わせて確定しました（${result.addedPoints} ポイント。時刻・標高・ウェイポイントは元の点から移しました）`
+          : `道なりに引き直しました（${result.addedPoints} ポイント）`)
     }
     clearDraft()
     setMode(then)

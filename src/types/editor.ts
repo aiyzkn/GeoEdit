@@ -31,7 +31,8 @@ export interface CreateLeg {
 export type DraftTarget =
   | { kind: 'new' }
   | { kind: 'append'; routeId: string; trackIndex: number; end: 'tail' | 'head' }
-  | { kind: 'replace'; routeId: string; trackIndex: number; startIndex: number; endIndex: number }
+  /** match = 既存の軌跡を道に合わせた下書き（確定のとき、元の点の時刻・標高・ウェイポイントを移す。トラックのマップマッチング設計書 §8.2） */
+  | { kind: 'replace'; routeId: string; trackIndex: number; startIndex: number; endIndex: number; match?: boolean }
 
 /** 作成中の下書き。legs[i] は anchors[i] → anchors[i + 1] */
 export interface Draft {
