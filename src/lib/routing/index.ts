@@ -9,9 +9,25 @@ import { LaneMatcher, type RasterSource } from './lane.ts'
 import { browserStdRaster } from './raster.ts'
 import { search } from './search.ts'
 import { snapToGraph } from './snap.ts'
-import type { FallbackReason, GraphPos, LatLng, RouteResult, RoutingOptions, TileBytesLoader } from './types.ts'
+import { DEFAULT_MATCH_PARAMS, matchTrack as matchTrackOnGraph, type MatchParams } from './match.ts'
+import type { FallbackReason, GraphPos, LatLng, RouteResult, RoutingOptions, SearchStep, TileBytesLoader } from './types.ts'
 
 export type { FallbackReason, LatLng, RouteResult, RoutingOptions } from './types.ts'
+export { DEFAULT_MATCH_PARAMS, type MatchParams } from './match.ts'
+
+/** トラックのマップマッチングの結果の区間。input は入力の点の番号の範囲（両端を含む） */
+export type TrackMatchSection =
+  | { kind: 'matched'; input: [number, number]; points: LatLng[]; anchors: { input: number; at: LatLng }[] }
+  | { kind: 'kept'; input: [number, number]; points: LatLng[] }
+
+export interface TrackMatchResult {
+  sections: TrackMatchSection[]
+  /** 区間をつないだ点の列（つなぎ目の重なりを除く） */
+  points: LatLng[]
+  /** 観測に使った点の数と、そのうち道に合わせられた数 */
+  observed: number
+  matched: number
+}
 
 /** これを超えたら、グラフを捨てて、いま要るタイルだけで作り直す（§3.3） */
 const MAX_GRAPH_EDGES = 1_500_000
@@ -29,6 +45,10 @@ const MAINLINE_GAP_M = 800
 const MAINLINE_STRAIGHT_COS = 0.966
 /** 分離帯のある辺に挟まれた、分離帯の無い辺をまとめて車線合わせの区間に入れる長さの上限（m） */
 const LANE_BRIDGE_EDGE_M = 50
+/** マップマッチングで、軌跡のまわりに取るタイルの余白（候補の半径に足す。m） */
+const MATCH_TILE_MARGIN_M = 200
+/** マップマッチングで取るタイルの上限（z14。約 2.4 km 四方。これを超える長い軌跡は分けて頼む） */
+const MATCH_MAX_TILES = 600
 
 type Progress = (done: number, total: number) => void
 
@@ -110,13 +130,68 @@ export class Router {
       if (!same(pts[pts.length - 1], q)) pts.push(q)
     }
     push(a)
+    for (const p of await this.stepsToPoints(a, res.steps, options, signal)) push(p)
+    if (signal?.aborted) return fallback(from, to, 'aborted')
+    push(b)
+    const last = { lat: to.lat, lng: to.lng }
+    if (!same(pts[pts.length - 1], last)) pts.push(last)
+    else pts[pts.length - 1] = last
+    if (pts.length === 1) pts.push(last)
+    return { status: 'ok', points: pts, distance: pathDistance(pts) }
+  }
+
+  /**
+   * 既存の軌跡を道に合わせる（トラックのマップマッチング設計書）。軌跡のまわりのタイルを取り、matchTrack() で道を選び、
+   * 道の区間を routeLeg() と同じ方法（車線合わせを含む）で線にする。道が見つからない区間は、元の点を残す。
+   * 失敗しても throw しない（null = タイルを取れない・中止）
+   */
+  async matchTrack(points: LatLng[], options: RoutingOptions, match: MatchParams = DEFAULT_MATCH_PARAMS, signal?: AbortSignal, onProgress?: Progress): Promise<TrackMatchResult | null> {
+    if (points.length < 2) return null
+    try {
+      const tiles: TileKey[] = []
+      for (let i = 1; i < points.length; i++) for (const t of tilesAroundSegment(points[i - 1], points[i], match.radiusM + MATCH_TILE_MARGIN_M)) tiles.push(t)
+      const keys = dedupeTiles(tiles)
+      if (keys.length > MATCH_MAX_TILES) return null
+      await this.ensureTiles(keys, signal, onProgress)
+    } catch {
+      return null
+    }
+    if (signal?.aborted) return null
+    const m = matchTrackOnGraph(this.graph, points, { ...match, maxClass: Math.min(match.maxClass, options.params.maxClass) }, () => signal?.aborted === true)
+    if (!m || signal?.aborted) return null
+    const sections: TrackMatchSection[] = []
+    for (const s of m.sections) {
+      if (s.kind === 'kept') {
+        sections.push({ kind: 'kept', input: s.input, points: points.slice(s.input[0], s.input[1] + 1).map((p) => ({ lat: p.lat, lng: p.lng })) })
+        continue
+      }
+      const pts: LatLng[] = [{ lat: round7(s.start.lat), lng: round7(s.start.lng) }]
+      for (const p of await this.stepsToPoints(s.start, s.steps, options, signal)) {
+        const q = { lat: round7(p.lat), lng: round7(p.lng) }
+        if (!same(pts[pts.length - 1], q)) pts.push(q)
+      }
+      if (signal?.aborted) return null
+      if (pts.length === 1) pts.push({ lat: round7(s.end.lat), lng: round7(s.end.lng) })
+      sections.push({ kind: 'matched', input: s.input, points: pts, anchors: s.anchors })
+    }
+    const all: LatLng[] = []
+    for (const s of sections) for (const p of s.points) if (all.length === 0 || !same(all[all.length - 1], p)) all.push(p)
+    return { sections, points: all, observed: m.observed, matched: m.matched }
+  }
+
+  /**
+   * 探索・マップマッチングの結果の辺の並びを、点の列にする（start から始まる。start と同じ点が先頭に入る。重なりは呼び出し側で除く）。
+   * 分離帯のある一般道・高速の本線は、地図画像の車線に合わせる（§13・§14.5）
+   */
+  private async stepsToPoints(start: LatLng, allSteps: SearchStep[], options: RoutingOptions, signal?: AbortSignal): Promise<LatLng[]> {
+    const g = this.graph
     // 辺ごとの点列を、種類ごとの区間にまとめる。
     //   div = 分離帯のある一般道（1 本の線）: 地図画像の車線に合わせる（§13）
     //   mw = 高速道路の本線（上下線を兼ねる 1 本の線）: 進む向きの左側の車道の中心へ（§14.5）
     //   ramp = 高速道路のランプ、plain = そのほか: そのまま
     // 上下線が別々の線になっている道路（一方通行と推定できた辺）は、線がすでに車道ごとにあるので合わせない
     type Kind = 'div' | 'mw' | 'ramp' | 'plain'
-    const steps = res.steps.filter((st) => st.from !== st.to)
+    const steps = allSteps.filter((st) => st.from !== st.to)
     const lenOf = (st: (typeof steps)[number]) => Math.abs(st.to - st.from) * g.edgeLen[st.edge]
     const useLane = options.lane === true && this.lane !== null
     const kinds: Kind[] = steps.map((st) => {
@@ -152,7 +227,7 @@ export class Router {
       }
     }
     const segs: { kind: Kind; pts: LatLng[] }[] = []
-    let cursor: LatLng = pts[pts.length - 1]
+    let cursor: LatLng = { lat: round7(start.lat), lng: round7(start.lng) }
     for (let i = 0; i < steps.length; i++) {
       const s = steps[i]
       const shape = g.subShape(s.edge, s.from, s.to)
@@ -181,14 +256,9 @@ export class Router {
         seg.pts = fixed
       }
     }
-    for (const seg of segs) for (const p of seg.pts) push(p)
-    if (signal?.aborted) return fallback(from, to, 'aborted')
-    push(b)
-    const last = { lat: to.lat, lng: to.lng }
-    if (!same(pts[pts.length - 1], last)) pts.push(last)
-    else pts[pts.length - 1] = last
-    if (pts.length === 1) pts.push(last)
-    return { status: 'ok', points: pts, distance: pathDistance(pts) }
+    const out: LatLng[] = []
+    for (const seg of segs) for (const p of seg.pts) out.push(p)
+    return out
   }
 
   /**
