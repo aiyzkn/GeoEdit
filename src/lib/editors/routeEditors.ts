@@ -106,6 +106,47 @@ export function thinOutByDistance(points: TrackPoint[], minDistM: number): Track
 }
 
 /**
+ * 形を保つ間引き（Douglas–Peucker 法。designs/機能追加・UI改善設計書.md B4）。
+ * toleranceM = 元の線からのずれの上限（m）。ウェイポイント付きの点・両端は必ず残す。
+ * 距離は、区間の中点の緯度で経度を縮めた平面の近似で求める。再帰でなく、スタックで処理する
+ */
+export function simplifyByTolerance<T extends { lat: number; lng: number; waypoint?: unknown }>(points: T[], toleranceM: number): T[] {
+  if (points.length <= 2) return points
+  const keep = new Uint8Array(points.length)
+  keep[0] = 1
+  keep[points.length - 1] = 1
+  // ウェイポイント付きの点で区切る
+  const cuts = [0]
+  for (let i = 1; i < points.length - 1; i++) if (points[i].waypoint) { keep[i] = 1; cuts.push(i) }
+  cuts.push(points.length - 1)
+  const M_PER_DEG = 111_320
+  const stack: [number, number][] = []
+  for (let c = 1; c < cuts.length; c++) if (cuts[c] - cuts[c - 1] > 1) stack.push([cuts[c - 1], cuts[c]])
+  while (stack.length) {
+    const [i0, i1] = stack.pop()!
+    const a = points[i0], b = points[i1]
+    const kx = Math.cos((((a.lat + b.lat) / 2) * Math.PI) / 180) * M_PER_DEG
+    const ax = a.lng * kx, ay = a.lat * M_PER_DEG
+    const dx = b.lng * kx - ax, dy = b.lat * M_PER_DEG - ay
+    const L2 = dx * dx + dy * dy
+    let worst = -1, wi = -1
+    for (let i = i0 + 1; i < i1; i++) {
+      const px = points[i].lng * kx - ax, py = points[i].lat * M_PER_DEG - ay
+      let t = L2 > 0 ? (px * dx + py * dy) / L2 : 0
+      t = Math.max(0, Math.min(1, t))
+      const d = Math.hypot(px - t * dx, py - t * dy)
+      if (d > worst) { worst = d; wi = i }
+    }
+    if (worst > toleranceM) {
+      keep[wi] = 1
+      if (wi - i0 > 1) stack.push([i0, wi])
+      if (i1 - wi > 1) stack.push([wi, i1])
+    }
+  }
+  return points.filter((_, i) => keep[i])
+}
+
+/**
  * Redistribute timestamps using slope-based speed.
  * Speed table: slope (grade %) → speed (km/h)
  */
@@ -185,21 +226,44 @@ export function convertRouteKind(route: RouteData, kind: RouteKind): RouteData {
   return { ...route, kind }
 }
 
-export function redistributeTime(points: TrackPoint[], startTime: Date): TrackPoint[] {
+/**
+ * 時刻の割り振りの速度（designs/機能追加・UI改善設計書.md B3）。
+ * walk = 傾斜を考慮した徒歩の速度表（平地 4 km/h）、constant = 一定の速度
+ */
+export type SpeedProfile = { kind: 'walk' } | { kind: 'constant'; kmh: number }
+
+export const WALK: SpeedProfile = { kind: 'walk' }
+export const CONSTANT_KMH_LIMITS = { min: 1, max: 200, default: 20 } as const
+
+/** 2 点の間を進むのにかかる時間（ms） */
+function segmentDurationMs(prev: TrackPoint, curr: TrackPoint, profile: SpeedProfile): number {
+  const distM = haversineM(prev.lat, prev.lng, curr.lat, curr.lng)
+  let speedKmh: number
+  if (profile.kind === 'constant') {
+    speedKmh = Math.min(CONSTANT_KMH_LIMITS.max, Math.max(CONSTANT_KMH_LIMITS.min, profile.kmh))
+  } else {
+    const elevDiff = (curr.ele ?? 0) - (prev.ele ?? 0)
+    const grade = distM > 0 ? (elevDiff / distM) * 100 : 0
+    speedKmh = interpolateSpeed(grade)
+  }
+  return (distM / (speedKmh * 1000 / 3600)) * 1000
+}
+
+/** 点列を、速度 profile で進むのにかかる時間（ms） */
+export function estimateDurationMs(points: { lat: number; lng: number; ele?: number }[], profile: SpeedProfile = WALK): number {
+  let total = 0
+  for (let i = 1; i < points.length; i++) total += segmentDurationMs(points[i - 1], points[i], profile)
+  return Math.round(total)
+}
+
+export function redistributeTime(points: TrackPoint[], startTime: Date, profile: SpeedProfile = WALK): TrackPoint[] {
   if (points.length === 0) return points
   const result = structuredClone(points) as TrackPoint[]
   result[0].time = new Date(startTime)
   let currentMs = startTime.getTime()
 
   for (let i = 1; i < result.length; i++) {
-    const prev = result[i - 1]
-    const curr = result[i]
-    const distM = haversineM(prev.lat, prev.lng, curr.lat, curr.lng)
-    const elevDiff = (curr.ele ?? 0) - (prev.ele ?? 0)
-    const grade = distM > 0 ? (elevDiff / distM) * 100 : 0
-    const speedKmh = interpolateSpeed(grade)
-    const durationMs = (distM / (speedKmh * 1000 / 3600)) * 1000
-    currentMs += Math.round(durationMs)
+    currentMs += Math.round(segmentDurationMs(result[i - 1], result[i], profile))
     result[i].time = new Date(currentMs)
   }
 
@@ -211,8 +275,8 @@ export function redistributeTime(points: TrackPoint[], startTime: Date): TrackPo
  * 傾斜・距離ベースの相対配分（redistributeTime）を求めた後、合計時間が
  * endTime と一致するよう各区間の所要時間を比例スケーリングする。
  */
-export function redistributeTimeWithRange(points: TrackPoint[], startTime: Date, endTime: Date): TrackPoint[] {
-  const naive = redistributeTime(points, startTime)
+export function redistributeTimeWithRange(points: TrackPoint[], startTime: Date, endTime: Date, profile: SpeedProfile = WALK): TrackPoint[] {
+  const naive = redistributeTime(points, startTime, profile)
   if (naive.length < 2) return naive
   const lastTime = naive[naive.length - 1].time
   if (!lastTime) return naive

@@ -3,7 +3,7 @@ import { useEditorStore } from '@/stores/editorStore'
 import { useRouteStore } from '@/stores/routeStore'
 import { useUiStore } from '@/stores/uiStore'
 import {
-  splitTrack, deleteRange, reverseTrack, thinOutByDistance,
+  splitTrack, deleteRange, reverseTrack, thinOutByDistance, simplifyByTolerance, estimateDurationMs,
   redistributeTime, redistributeTimeWithRange, shiftTime, isRouteNameTaken,
   trackToNameLine, parseTrackNameLine,
   mergeRoutesUnified, mergeRoutesChronological, mergeRoutesSimple,
@@ -12,7 +12,10 @@ import { fetchElevations } from '@/lib/elevationApi'
 import { useElevReplace } from '@/hooks/useElevReplace'
 import ExportDialog from '@/components/common/ExportDialog'
 import RoutingSettingsDialog from '@/components/properties/RoutingSettingsDialog'
-import { draftPoints, draftDistance } from '@/lib/editors/draft'
+import { draftPointsSimplified, draftDistance, DRAFT_SIMPLIFY_M } from '@/lib/editors/draft'
+import { computeGainLoss } from '@/lib/routeStats'
+import { useDraftProfileSync } from '@/hooks/useDraftProfile'
+import SpeedSelect from '@/components/properties/SpeedSelect'
 import { removeLastAnchor, rerouteAll } from '@/lib/draftController'
 import { Settings2 } from 'lucide-react'
 import type { RouteData, TrackPoint } from '@/types/route'
@@ -24,7 +27,8 @@ function toLocalDatetimeInputValue(d: Date): string {
 }
 
 export default function EditModePanel() {
-  const { mode, setMode, selection, setSelection, pushUndo, draft, clearDraft, routingSettings, setRoutingSettings, routingProgress, setBusy, mergeTargetIds, partialEdit, clearPartialEdit, mapMatchEnabled, setMapMatchEnabled } = useEditorStore()
+  const { mode, setMode, selection, setSelection, pushUndo, draft, clearDraft, routingSettings, setRoutingSettings, routingProgress, setBusy, mergeTargetIds, partialEdit, clearPartialEdit, mapMatchEnabled, setMapMatchEnabled, speedProfile, setSpeedProfile, createAutoElevation: autoElevation, setCreateAutoElevation: setAutoElevation, createSimplify, setCreateSimplify, draftProfile } = useEditorStore()
+  useDraftProfileSync()
   const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, updateRoute, addRoute, removeRoute } = useRouteStore()
   const { addToast } = useUiStore()
   const { replaceElevations } = useElevReplace()
@@ -46,7 +50,8 @@ export default function EditModePanel() {
   // ページロード時点の日時を既定値にする（リアルタイム更新はしない。EditModePanel はアプリ全体で1度だけマウントされるため useState の初期化関数のみで足りる）
   const [createStartStr, setCreateStartStr] = useState(() => toLocalDatetimeInputValue(new Date()))
   const [createEndStr, setCreateEndStr] = useState('')
-  const [autoElevation, setAutoElevation] = useState(true)
+  const [thinMethod, setThinMethod] = useState<'distance' | 'shape'>('distance')
+  const [thinToleranceM, setThinToleranceM] = useState(2)
   const [creating, setCreating] = useState(false)
   const [mergeMethod, setMergeMethod] = useState<'unified' | 'chronological' | 'simple'>('unified')
   const [splitName1, setSplitName1] = useState('')
@@ -76,6 +81,27 @@ export default function EditModePanel() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode])
+
+  // 作成中の 1 行の要約（B5）: 登り・下り・見込みの所要時間と到着時刻
+  const draftSummary = (() => {
+    if (mode !== 'create' || !draftProfile || draftProfile.points.length < 2) return ''
+    const parts: string[] = []
+    const hasEle = autoElevation && draftProfile.points.some((p) => p.ele != null)
+    if (hasEle) {
+      const { gainM, lossM } = computeGainLoss(draftProfile.points)
+      parts.push(`登り ${Math.round(gainM)} m / 下り ${Math.round(lossM)} m${draftProfile.complete ? '' : '（取得中）'}`)
+    }
+    const ms = estimateDurationMs(draftProfile.points, speedProfile)
+    const h = Math.floor(ms / 3_600_000), m = Math.round((ms % 3_600_000) / 60_000)
+    let s = `見込み ${h > 0 ? `${h} 時間 ` : ''}${String(m).padStart(h > 0 ? 2 : 1, '0')} 分`
+    const start = createStartStr ? new Date(createStartStr) : null
+    if (start && !isNaN(start.getTime()) && !createEndStr) {
+      const arr = new Date(start.getTime() + ms)
+      s += `（到着 ${String(arr.getHours()).padStart(2, '0')}:${String(arr.getMinutes()).padStart(2, '0')}）`
+    }
+    parts.push(s)
+    return parts.join(' ・ ')
+  })()
 
   if (mode === 'none') return null
   if (mode !== 'create' && !route) return null
@@ -162,7 +188,7 @@ export default function EditModePanel() {
   const handleThinOut = () => {
     if (!track) return
     pushUndo('間引き', snapshot())
-    const pts = thinOutByDistance(track.points, thinDistM)
+    const pts = thinMethod === 'shape' ? simplifyByTolerance(track.points, thinToleranceM) : thinOutByDistance(track.points, thinDistM)
     const removed = track.points.length - pts.length
     updateRoute(route.id, (r) => { r.tracks[selectedTrackIndex].points = pts })
     addToast('success', `間引き完了: ${removed} ポイント削除`)
@@ -184,10 +210,10 @@ export default function EditModePanel() {
       }
       if (end.getTime() <= start.getTime()) { addToast('error', '終了日時は開始日時より後にしてください'); return }
       pushUndo('時刻再計算', snapshot())
-      pts = redistributeTimeWithRange(track.points, start, end)
+      pts = redistributeTimeWithRange(track.points, start, end, speedProfile)
     } else {
       pushUndo('時刻再計算', snapshot())
-      pts = redistributeTime(track.points, start)
+      pts = redistributeTime(track.points, start, speedProfile)
     }
     updateRoute(route.id, (r) => { r.tracks[selectedTrackIndex].points = pts })
     addToast('success', '時刻を再計算しました')
@@ -316,13 +342,19 @@ export default function EditModePanel() {
       if (endTime.getTime() <= startTime.getTime()) { addToast('error', '終了日時は開始日時より後にしてください'); return }
     }
 
-    const pts = draftPoints(draft)
+    const pts = draftPointsSimplified(draft, createSimplify)
     setCreating(true)
     setBusy(true)
     let elevs: (number | null)[] = []
     if (autoElevation) {
-      addToast('info', `標高取得中: ${pts.length} ポイント`)
-      elevs = await fetchElevations(pts)
+      // 作成中に取った標高がそろっていれば、それを使う（取り直さない。B5）
+      const prof = useEditorStore.getState().draftProfile
+      if (prof?.complete && prof.points.length === pts.length) {
+        elevs = prof.points.map((p) => p.ele ?? null)
+      } else {
+        addToast('info', `標高取得中: ${pts.length} ポイント`)
+        elevs = await fetchElevations(pts)
+      }
     }
     let points: TrackPoint[] = pts.map((p, i) => ({
       lat: p.lat,
@@ -330,7 +362,7 @@ export default function EditModePanel() {
       ele: elevs[i] ?? undefined,
     }))
     if (startTime) {
-      points = endTime ? redistributeTimeWithRange(points, startTime, endTime) : redistributeTime(points, startTime)
+      points = endTime ? redistributeTimeWithRange(points, startTime, endTime, speedProfile) : redistributeTime(points, startTime, speedProfile)
     }
     const newRoute: RouteData = {
       id: crypto.randomUUID(),
@@ -357,6 +389,7 @@ export default function EditModePanel() {
           <span className="text-[var(--color-muted)]">新規ルート作成:</span>
           <span>地図をクリックしてポイントを追加（{draft.anchors.length} 点）</span>
           {draft.legs.length > 0 && <span className="text-[var(--color-muted)]">{(draftDistance(draft) / 1000).toFixed(2)} km</span>}
+          {draftSummary && <span className="text-[var(--color-muted)]" data-testid="draft-summary">{draftSummary}</span>}
           <input
             type="text"
             placeholder="ルート名"
@@ -389,6 +422,11 @@ export default function EditModePanel() {
             <input type="checkbox" checked={autoElevation} onChange={(e) => setAutoElevation(e.target.checked)} />
             標高を自動取得
           </label>
+          <label className="flex items-center gap-1" title={`経路探索で結んだ区間の点を、線の形を保って間引きます（元の線からのずれ ${DRAFT_SIMPLIFY_M} m まで）`}>
+            <input type="checkbox" checked={createSimplify} onChange={(e) => setCreateSimplify(e.target.checked)} />
+            点を間引く（形を保つ）
+          </label>
+          <SpeedSelect value={speedProfile} onChange={setSpeedProfile} />
           <label
             className="flex items-center gap-1"
             title="通過点の間を、道路に沿って自動で結びます。Ctrl（macOSは⌘）を押しながらクリックすると、その区間だけ直線で結びます"
@@ -576,17 +614,45 @@ export default function EditModePanel() {
         </div>
       )}
       {mode === 'thinOut' && (
-        <div className="flex items-center gap-2">
-          <span className="text-[var(--color-muted)]">間引き距離:</span>
-          <input
-            type="number"
-            min={1}
-            max={1000}
-            value={thinDistM}
-            onChange={(e) => setThinDistM(Number(e.target.value))}
-            className="w-20 px-1 py-0.5 border border-[var(--color-border)] rounded bg-[var(--color-bg)]"
-          />
-          <span>m</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="flex items-center gap-1">
+            <input type="radio" name="thin-method" checked={thinMethod === 'distance'} onChange={() => setThinMethod('distance')} />
+            道のりの間隔
+          </label>
+          {thinMethod === 'distance' && (
+            <>
+              <span className="text-[var(--color-muted)]">間引き距離:</span>
+              <input
+                type="number"
+                min={1}
+                max={1000}
+                value={thinDistM}
+                onChange={(e) => setThinDistM(Number(e.target.value))}
+                className="w-20 px-1 py-0.5 border border-[var(--color-border)] rounded bg-[var(--color-bg)]"
+              />
+              <span>m</span>
+            </>
+          )}
+          <label className="flex items-center gap-1" title="カーブの頂点を残し、元の線からのずれが許容以内になるように間引きます">
+            <input type="radio" name="thin-method" checked={thinMethod === 'shape'} onChange={() => setThinMethod('shape')} />
+            形を保つ
+          </label>
+          {thinMethod === 'shape' && (
+            <>
+              <span className="text-[var(--color-muted)]">許容:</span>
+              <input
+                type="number"
+                aria-label="許容（m）"
+                min={0.5}
+                max={100}
+                step={0.5}
+                value={thinToleranceM}
+                onChange={(e) => setThinToleranceM(Number(e.target.value))}
+                className="w-16 px-1 py-0.5 border border-[var(--color-border)] rounded bg-[var(--color-bg)]"
+              />
+              <span>m</span>
+            </>
+          )}
           <button onClick={handleThinOut} className="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-500">間引き実行</button>
         </div>
       )}
@@ -622,6 +688,7 @@ export default function EditModePanel() {
                 onChange={(e) => setTimeEndStr(e.target.value)}
                 className="px-1 py-0.5 border border-[var(--color-border)] rounded bg-[var(--color-bg)] text-[var(--color-fg)]"
               />
+              <SpeedSelect value={speedProfile} onChange={setSpeedProfile} />
               <button onClick={handleTimeEdit} className="px-2 py-1 bg-green-600 text-white rounded hover:bg-green-500">時刻再計算</button>
             </div>
           ) : (

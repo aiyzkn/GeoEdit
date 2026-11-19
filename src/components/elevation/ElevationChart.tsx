@@ -1,14 +1,22 @@
 import { useMemo } from 'react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { useRouteStore } from '@/stores/routeStore'
+import { useEditorStore } from '@/stores/editorStore'
 import { haversineM } from '@/lib/geometry'
 
 export default function ElevationChart() {
   const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, selectPoint, hoverPoint } = useRouteStore()
 
+  const mode = useEditorStore((s) => s.mode)
+  const draftProfile = useEditorStore((s) => s.draftProfile)
+  const autoEle = useEditorStore((s) => s.createAutoElevation)
+  const setDraftHoverIndex = useEditorStore((s) => s.setDraftHoverIndex)
+  // 作成モードで下書きが 2 点以上あれば、選択中のトラックの代わりに下書きの断面を描く（B5）
+  const isDraft = mode === 'create' && autoEle && !!draftProfile && draftProfile.points.length >= 2
+
   const route = routes.find((r) => r.id === selectedRouteId)
   const track = route?.tracks[selectedTrackIndex]
-  const points = track?.points ?? []
+  const points: { lat: number; lng: number; ele?: number }[] = isDraft ? draftProfile!.points : (track?.points ?? [])
 
   const data = useMemo(() => {
     let cumDist = 0
@@ -41,12 +49,13 @@ export default function ElevationChart() {
         margin={{ top: 4, right: 8, left: 4, bottom: 2 }}
         onMouseMove={(e) => {
           if (e.activePayload?.[0]) {
-            hoverPoint(e.activePayload[0].payload.index)
+            if (isDraft) setDraftHoverIndex(e.activePayload[0].payload.index)
+            else hoverPoint(e.activePayload[0].payload.index)
           }
         }}
-        onMouseLeave={() => hoverPoint(null)}
+        onMouseLeave={() => (isDraft ? setDraftHoverIndex(null) : hoverPoint(null))}
         onClick={(e) => {
-          if (e.activePayload?.[0]) {
+          if (!isDraft && e.activePayload?.[0]) {
             selectPoint(e.activePayload[0].payload.index)
           }
         }}
@@ -77,7 +86,7 @@ export default function ElevationChart() {
           activeDot={{ r: 3 }}
           connectNulls
         />
-        {selectedPointIndex != null && data[selectedPointIndex] && (
+        {!isDraft && selectedPointIndex != null && data[selectedPointIndex] && (
           <ReferenceLine x={data[selectedPointIndex].dist} stroke="#ef4444" strokeWidth={1.5} />
         )}
       </AreaChart>
