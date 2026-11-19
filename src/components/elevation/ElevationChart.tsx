@@ -1,11 +1,16 @@
 import { useMemo } from 'react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
+import { useShallow } from 'zustand/react/shallow'
 import { useRouteStore } from '@/stores/routeStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { haversineM } from '@/lib/geometry'
 
 export default function ElevationChart() {
-  const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, selectPoint, hoverPoint } = useRouteStore()
+  // ストア全体ではなく、使う値だけを購読する（ホバーのたびに、全点のグラフを描き直さないように。E3）
+  const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, selectPoint, hoverPoint } = useRouteStore(useShallow((s) => ({
+    routes: s.routes, selectedRouteId: s.selectedRouteId, selectedTrackIndex: s.selectedTrackIndex,
+    selectedPointIndex: s.selectedPointIndex, selectPoint: s.selectPoint, hoverPoint: s.hoverPoint,
+  })))
 
   const mode = useEditorStore((s) => s.mode)
   const draftProfile = useEditorStore((s) => s.draftProfile)

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useEditorStore } from '@/stores/editorStore'
+import { useShallow } from 'zustand/react/shallow'
 import { useRouteStore } from '@/stores/routeStore'
 import { useUiStore } from '@/stores/uiStore'
 import {
@@ -30,7 +31,7 @@ function toLocalDatetimeInputValue(d: Date): string {
 export default function EditModePanel() {
   const { mode, setMode, selection, setSelection, pushUndo, draft, clearDraft, routingSettings, setRoutingSettings, routingProgress, setBusy, mergeTargetIds, partialEdit, clearPartialEdit, mapMatchEnabled, setMapMatchEnabled, speedProfile, setSpeedProfile, createAutoElevation: autoElevation, setCreateAutoElevation: setAutoElevation, createSimplify, setCreateSimplify, draftProfile, draftTarget } = useEditorStore()
   useDraftProfileSync()
-  const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, updateRoute, addRoute, removeRoute } = useRouteStore()
+  const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, updateRoute, addRoute, removeRoute } = useRouteStore(useShallow((s) => ({ routes: s.routes, selectedRouteId: s.selectedRouteId, selectedTrackIndex: s.selectedTrackIndex, selectedPointIndex: s.selectedPointIndex, updateRoute: s.updateRoute, addRoute: s.addRoute, removeRoute: s.removeRoute })))
   const { addToast } = useUiStore()
   const { replaceElevations } = useElevReplace()
 

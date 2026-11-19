@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import type { RouteData } from '@/types/route'
+import { useShallow } from 'zustand/react/shallow'
 import { useRouteStore } from '@/stores/routeStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { nearestPointIndex } from '@/lib/geometry'
@@ -19,7 +20,7 @@ export default function RoutePolyline({ route, map, color }: Props) {
   const rangeMarkers = useRef<L.CircleMarker[]>([])
   const wptEditMarkers = useRef<L.CircleMarker[]>([])
   const startEndMarkers = useRef<L.CircleMarker[]>([])
-  const { selectedRouteId, selectedPointIndex, hoveredPointIndex, selectRoute } = useRouteStore()
+  const { selectedRouteId, selectedPointIndex, hoveredPointIndex, selectRoute } = useRouteStore(useShallow((s) => ({ selectedRouteId: s.selectedRouteId, selectedPointIndex: s.selectedPointIndex, hoveredPointIndex: s.hoveredPointIndex, selectRoute: s.selectRoute })))
   const { pushUndo, mode, selection, toggleDeleteRangeMarker, toggleMergeTarget } = useEditorStore()
   const isSelected = selectedRouteId === route.id
 

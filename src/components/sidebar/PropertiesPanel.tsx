@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useRouteStore } from '@/stores/routeStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { useUiStore } from '@/stores/uiStore'
@@ -26,7 +27,7 @@ function toTimeInputValue(d?: Date) {
 const KIND_LABEL: Record<RouteKind, string> = { track: 'トラック (<trk>)', route: 'ルート (<rte>)', waypoint: 'ウェイポイント (<wpt>)' }
 
 export default function PropertiesPanel() {
-  const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, updateRoute } = useRouteStore()
+  const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, updateRoute } = useRouteStore(useShallow((s) => ({ routes: s.routes, selectedRouteId: s.selectedRouteId, selectedTrackIndex: s.selectedTrackIndex, selectedPointIndex: s.selectedPointIndex, updateRoute: s.updateRoute })))
   const { pushUndo } = useEditorStore()
   const { addToast } = useUiStore()
   const route = routes.find((r) => r.id === selectedRouteId)

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Upload, Undo2, Redo2, Sun, Moon, Monitor, HelpCircle, Info, PanelRightOpen, PanelRightClose, Download } from 'lucide-react'
 import { useEditorStore } from '@/stores/editorStore'
+import { useShallow } from 'zustand/react/shallow'
 import { useRouteStore } from '@/stores/routeStore'
 import { useUiStore, type ColorTheme } from '@/stores/uiStore'
 import { useFileLoader } from '@/hooks/useFileLoader'
@@ -23,7 +24,7 @@ const OPEN_AS_KINDS: { value: RouteKind; label: string }[] = [
 
 export default function AppHeader() {
   const { undoStack, redoStack, undo, redo } = useEditorStore()
-  const { setRoutes, routes, selectedRouteId } = useRouteStore()
+  const { setRoutes, routes, selectedRouteId } = useRouteStore(useShallow((s) => ({ setRoutes: s.setRoutes, routes: s.routes, selectedRouteId: s.selectedRouteId })))
   const { theme, setTheme, setShowHelp, openAsKind, setOpenAsKind, sidebarOpen, toggleSidebar, setShowExport } = useUiStore()
   const { openFiles } = useFileLoader()
   const [showAbout, setShowAbout] = useState(false)

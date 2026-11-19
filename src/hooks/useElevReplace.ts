@@ -1,4 +1,5 @@
 import { useCallback } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useRouteStore } from '@/stores/routeStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { useUiStore } from '@/stores/uiStore'
@@ -6,7 +7,7 @@ import { fetchElevations } from '@/lib/elevationApi'
 import { interpolateMissingElevations } from '@/lib/editors/routeEditors'
 
 export function useElevReplace() {
-  const { routes, selectedRouteId, selectedTrackIndex, updateRoute } = useRouteStore()
+  const { routes, selectedRouteId, selectedTrackIndex, updateRoute } = useRouteStore(useShallow((s) => ({ routes: s.routes, selectedRouteId: s.selectedRouteId, selectedTrackIndex: s.selectedTrackIndex, updateRoute: s.updateRoute })))
   const { pushUndo, setBusy } = useEditorStore()
   const { addToast } = useUiStore()
 

@@ -62,7 +62,7 @@ async function autoFillElevation(route: RouteData) {
 }
 
 export function useFileLoader() {
-  const { addRoute } = useRouteStore()
+  const addRoute = useRouteStore((s) => s.addRoute)
   const { addToast } = useUiStore()
 
   const loadFiles = useCallback(async (files: FileList | File[]) => {
