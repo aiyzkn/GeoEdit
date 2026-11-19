@@ -2,7 +2,7 @@ import { useState } from 'react'
 import {
   Scissors, Trash2, Merge, GitBranch, Clock, RotateCcw,
   Mountain, MapPin, Type, Download, Info, MousePointer, Plus, Menu, X, Route } from 'lucide-react'
-import { useEditorStore, confirmDiscardCreatePoints } from '@/stores/editorStore'
+import { useEditorStore, confirmLeaveDraft, requestDraftCommit } from '@/stores/editorStore'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 import type { EditMode } from '@/types/editor'
 
@@ -53,11 +53,15 @@ export default function EditToolbar() {
   const breakpoint = useBreakpoint()
   const [expanded, setExpanded] = useState(false)
 
-  const select = (m: EditMode) => {
+  const select = async (m: EditMode) => {
     // 同一モードのボタンはトグルで解除（'none'）になる。切替先が作成モード以外になる場合、
     // 未確定ポイントを暗黙に破棄しない（確認してキャンセル可能にする）
     const target = m === mode ? 'none' : m
-    if (target !== useEditorStore.getState().mode && !confirmDiscardCreatePoints()) return
+    if (target !== useEditorStore.getState().mode) {
+      const answer = await confirmLeaveDraft()
+      if (answer === 'keep') return
+      if (answer === 'commit') { requestDraftCommit(target); return }
+    }
     setMode(target)
     setExpanded(false)
   }

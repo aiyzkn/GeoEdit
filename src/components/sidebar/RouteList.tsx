@@ -1,4 +1,5 @@
 import { Trash2, Download, ChevronRight, Route as RouteIcon, Milestone, MapPin } from 'lucide-react'
+import { isRouteDirty, useCleanStore } from '@/lib/persistence/dirty'
 import { useRouteStore } from '@/stores/routeStore'
 import { useEditorStore } from '@/stores/editorStore'
 import ExportDialog from '@/components/common/ExportDialog'
@@ -16,6 +17,7 @@ const KIND_ICON: Record<RouteKind, React.ReactNode> = {
 }
 
 export default function RouteList() {
+  const clean = useCleanStore((st) => st.clean)
   const { routes, selectedRouteId, selectRoute, removeRoute, updateRoute } = useRouteStore()
   const { mode, mergeTargetIds, toggleMergeTarget, pushUndo } = useEditorStore()
   const [exportRoute, setExportRoute] = useState<RouteData | null>(null)
@@ -102,6 +104,7 @@ export default function RouteList() {
                 <span className="text-xs font-medium truncate flex-1" title={route.name}>
                   {route.name}
                 </span>
+                {isRouteDirty(route, clean) && <span className="text-orange-500 text-xs shrink-0" title="保存していない変更があります" aria-label="保存していない変更があります">●</span>}
               </div>
 
               <div className="flex items-center justify-between mt-1 pl-7">

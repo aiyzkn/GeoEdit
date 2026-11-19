@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useEditorStore } from '@/stores/editorStore'
 import { useRouteStore } from '@/stores/routeStore'
 import { useUiStore } from '@/stores/uiStore'
@@ -20,6 +20,7 @@ import { removeLastAnchor, rerouteAll, startAppend, startNew, startReplace } fro
 import { applyDraft, countWaypointsInRange } from '@/lib/editors/draftApply'
 import { Settings2 } from 'lucide-react'
 import type { RouteData, TrackPoint } from '@/types/route'
+import type { EditMode } from '@/types/editor'
 
 /** <input type="datetime-local"> 用に、ローカルタイムゾーンでの日時文字列を組み立てる（toISOString はUTC基準のためズレる） */
 function toLocalDatetimeInputValue(d: Date): string {
@@ -103,6 +104,17 @@ export default function EditModePanel() {
     parts.push(s)
     return parts.join(' ・ ')
   })()
+
+  // 「確定して移動」（C3）: ツールバー・Esc の確認ダイアログから来る。フックは早い return より前に置く
+  const confirmRef = useRef<(then: EditMode) => Promise<boolean>>(async () => false)
+  useEffect(() => {
+    const onCommit = (e: Event) => {
+      const then = (e as CustomEvent<{ then: EditMode }>).detail?.then ?? 'none'
+      void confirmRef.current(then)
+    }
+    document.addEventListener('draft-commit', onCommit)
+    return () => document.removeEventListener('draft-commit', onCommit)
+  }, [])
 
   if (mode === 'none') return null
   if (mode !== 'create' && mode !== 'reroute' && !route) return null
@@ -312,38 +324,39 @@ export default function EditModePanel() {
     setMode('none')
   }
 
-  const handleCreateConfirm = async () => {
+  /** 下書きを確定する。then = 確定のあとに移るモード。確定できたら true */
+  const handleCreateConfirm = async (then: EditMode = 'none'): Promise<boolean> => {
     const target = useEditorStore.getState().draftTarget
     if (draft.anchors.length < 2) {
       addToast('info', '地図をクリックして2点以上追加してください')
-      return
+      return false
     }
     if (draft.legs.some((l) => l.status === 'pending')) {
       addToast('info', '経路の探索が終わってから確定してください')
-      return
+      return false
     }
     let newRoute: { id: string; name: string; trackName?: string; startTime?: Date; endTime?: Date } | undefined
     if (target.kind === 'new') {
       const name = createRouteName.trim() || `新規ルート ${routes.length + 1}`
       if (isRouteNameTaken(routes, name)) {
         addToast('error', `同名のルートが既に存在します: ${name}`)
-        return
+        return false
       }
       let startTime: Date | undefined
       let endTime: Date | undefined
       if (createStartStr) {
         startTime = new Date(createStartStr)
-        if (isNaN(startTime.getTime())) { addToast('error', '開始日時の形式が正しくありません'); return }
+        if (isNaN(startTime.getTime())) { addToast('error', '開始日時の形式が正しくありません'); return false }
       }
       if (createEndStr) {
-        if (!startTime) { addToast('error', '終了日時を指定する場合は開始日時も指定してください'); return }
+        if (!startTime) { addToast('error', '終了日時を指定する場合は開始日時も指定してください'); return false }
         endTime = new Date(createEndStr)
-        if (isNaN(endTime.getTime())) { addToast('error', '終了日時の形式が正しくありません'); return }
+        if (isNaN(endTime.getTime())) { addToast('error', '終了日時の形式が正しくありません'); return false }
         if (startTime.toDateString() !== endTime.toDateString()) {
           addToast('error', '開始・終了は同じ日付にしてください（日付をまたぐ設定は不可）')
-          return
+          return false
         }
-        if (endTime.getTime() <= startTime.getTime()) { addToast('error', '終了日時は開始日時より後にしてください'); return }
+        if (endTime.getTime() <= startTime.getTime()) { addToast('error', '終了日時は開始日時より後にしてください'); return false }
       }
       newRoute = { id: crypto.randomUUID(), name, trackName: createTrackName.trim() || undefined, startTime, endTime }
     }
@@ -351,7 +364,14 @@ export default function EditModePanel() {
       // 区間の中のウェイポイントは消える（B1）
       const tp = routes.find((r) => r.id === target.routeId)?.tracks[target.trackIndex]?.points ?? []
       const n = countWaypointsInRange(tp, target.startIndex, target.endIndex)
-      if (n > 0 && !window.confirm(`引き直す区間の中にあるウェイポイント ${n} 個が消えます。続けますか？`)) return
+      if (n > 0) {
+        const ok = await useUiStore.getState().confirm({
+          title: 'ウェイポイントが消えます',
+          message: `引き直す区間の中にあるウェイポイント ${n} 個が消えます。`,
+          actions: [{ id: 'cancel', label: 'やめる' }, { id: 'ok', label: '引き直す', kind: 'danger' }],
+        })
+        if (ok !== 'ok') return false
+      }
     }
 
     const pts = draftPointsSimplified(draft, createSimplify)
@@ -374,7 +394,7 @@ export default function EditModePanel() {
     setCreating(false)
     if (!result.ok) {
       addToast('error', result.error === 'target-missing' ? '対象のルートが見つかりません' : '点が足りません')
-      return
+      return false
     }
     pushUndo(result.undoLabel, routes)
     if (target.kind === 'new') {
@@ -385,8 +405,11 @@ export default function EditModePanel() {
       addToast('success', target.kind === 'append' ? `ルートに追記しました（${result.addedPoints} ポイント）` : `道なりに引き直しました（${result.addedPoints} ポイント）`)
     }
     clearDraft()
-    setMode('none')
+    setMode(then)
+    return true
   }
+
+  confirmRef.current = handleCreateConfirm
 
   return (
     <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs space-y-2">
@@ -542,7 +565,7 @@ export default function EditModePanel() {
             1点削除
           </button>
           <button
-            onClick={handleCreateConfirm}
+            onClick={() => { void handleCreateConfirm() }}
             disabled={draft.anchors.length < 2 || creating || draft.legs.some((l) => l.status === 'pending')}
             className="px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-500 disabled:opacity-40"
           >

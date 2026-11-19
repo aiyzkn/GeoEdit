@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
-import { useEditorStore, confirmDiscardCreatePoints } from '@/stores/editorStore'
+import { useEditorStore, confirmLeaveDraft, requestDraftCommit } from '@/stores/editorStore'
+import { useUiStore } from '@/stores/uiStore'
 import { useRouteStore } from '@/stores/routeStore'
 import { undo as draftUndo, redo as draftRedo } from '@/lib/draftController'
 
@@ -38,9 +39,13 @@ export function useKeyboard() {
         }
       } else if (e.key === 'Escape') {
         e.preventDefault()
+        if (useUiStore.getState().confirmRequest) return // 確認ダイアログが閉じる（ダイアログの側で扱う）
         // 作成モードの未確定ポイントを暗黙に破棄しない（確認してキャンセル可能にする）
-        if (!confirmDiscardCreatePoints()) return
-        useEditorStore.getState().setMode('none')
+        void confirmLeaveDraft().then((answer) => {
+          if (answer === 'keep') return
+          if (answer === 'commit') { requestDraftCommit('none'); return }
+          useEditorStore.getState().setMode('none')
+        })
       }
     }
 

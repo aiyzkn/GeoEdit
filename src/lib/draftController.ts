@@ -13,7 +13,7 @@ import type { FallbackReason, LatLng } from '@/lib/routing'
 import {
   addAnchor, bumpPending, emptyDraft, insertAnchor, moveAnchor, newId, pendingLegs, removeAnchor, resetAutoLegs, setLegResult,
 } from '@/lib/editors/draft'
-import type { Draft, LegMode } from '@/types/editor'
+import type { Draft, DraftTarget, LegMode } from '@/types/editor'
 import { useRouteStore } from '@/stores/routeStore'
 
 const DRAG_THROTTLE_MS = 150
@@ -145,6 +145,13 @@ export function startAppend(routeId: string, trackIndex: number, end: 'tail' | '
   const d = addAnchor(emptyDraft(), { id: newId('a-'), lat: p.lat, lng: p.lng, locked: true }, 'auto')
   store().startDraft(d, { kind: 'append', routeId, trackIndex, end })
   return true
+}
+
+/** 自動保存から復元した下書きで再開する（C1）。探索中だった区間は頼み直す */
+export function resumeDraft(d: Draft, target: DraftTarget) {
+  cancelAll()
+  store().startDraft(bumpPending(d), target)
+  requestPending()
 }
 
 /** 新しいルートを作る（追記をやめる）。下書きは空にする */
