@@ -7,11 +7,11 @@ import { useEditorStore } from '@/stores/editorStore'
 import { useMapStore } from '@/stores/mapStore'
 import { useUiStore } from '@/stores/uiStore'
 import { matchPoint, isMatchModifierPressed } from '@/lib/mapMatch'
-import { routeLeg, snapAnchor } from '@/lib/routingClient'
+import { matchTrack, routeLeg, snapAnchor } from '@/lib/routingClient'
 import { resolveRoutingOptions } from '@/lib/routing/settings'
-import type { FallbackReason, LatLng } from '@/lib/routing'
+import type { FallbackReason, LatLng, RoadClass } from '@/lib/routing'
 import {
-  addAnchor, bumpPending, emptyDraft, insertAnchor, moveAnchor, newId, pendingLegs, removeAnchor, resetAutoLegs, setLegResult,
+  addAnchor, bumpPending, draftFromMatch, emptyDraft, insertAnchor, moveAnchor, newId, pendingLegs, removeAnchor, resetAutoLegs, setLegResult,
 } from '@/lib/editors/draft'
 import type { Draft, DraftTarget, LegMode } from '@/types/editor'
 import { useRouteStore } from '@/stores/routeStore'
@@ -172,6 +172,48 @@ export function startReplace(routeId: string, trackIndex: number, startIndex: nu
   store().startDraft(d, { kind: 'replace', routeId, trackIndex, startIndex, endIndex })
   requestPending()
   return true
+}
+
+// ── 既存の軌跡を道に合わせる（トラックのマップマッチング設計書 §8 段階 2） ──
+let matchAbort: AbortController | null = null
+
+export type StartMatchResult =
+  | { ok: true; observed: number; matched: number; keptSections: number; keptPoints: number }
+  | { ok: false; error: 'bad-range' | 'failed' | 'aborted' | 'no-road' }
+
+/**
+ * トラックの startIndex〜endIndex を道に合わせ、道なり補正の下書きにする（確定は道なり補正と同じ）。
+ * 道が見つからない区間は元の点を残す。startIndex > endIndex でもよい（並べ替える）
+ */
+export async function startMatch(routeId: string, trackIndex: number, startIndex: number, endIndex: number): Promise<StartMatchResult> {
+  const pts = trackPoints(routeId, trackIndex)
+  const s = Math.min(startIndex, endIndex), e = Math.max(startIndex, endIndex)
+  if (!pts || s === e || !pts[s] || !pts[e]) return { ok: false, error: 'bad-range' }
+  cancelAll()
+  matchAbort?.abort()
+  const ac = new AbortController()
+  matchAbort = ac
+  const slice = pts.slice(s, e + 1).map((p) => ({ lat: p.lat, lng: p.lng }))
+  const base = resolveRoutingOptions(store().routingSettings)
+  // 軌跡は実際に通った道を示すので、「高速・有料を避ける」の設定は使わない（階級の上限を外す）
+  const options = { ...base, params: { ...base.params, maxClass: 6 as RoadClass } }
+  const r = await matchTrack(slice, options, ac.signal, (done, total) => {
+    if (matchAbort === ac) store().setRoutingProgress({ done, total })
+  })
+  if (matchAbort === ac) { matchAbort = null; store().setRoutingProgress(null) }
+  if (ac.signal.aborted) return { ok: false, error: 'aborted' }
+  if (!r) return { ok: false, error: 'failed' }
+  if (r.matched === 0) return { ok: false, error: 'no-road' }
+  const d = draftFromMatch(pts[s], pts[e], r.sections)
+  if (!d) return { ok: false, error: 'failed' }
+  store().startDraft(d, { kind: 'replace', routeId, trackIndex, startIndex: s, endIndex: e })
+  const kept = r.sections.filter((x) => x.kind === 'kept')
+  return { ok: true, observed: r.observed, matched: r.matched, keptSections: kept.length, keptPoints: kept.reduce((a, x) => a + x.input[1] - x.input[0] + 1, 0) }
+}
+
+/** 道に合わせる処理を中止する */
+export function cancelMatch() {
+  matchAbort?.abort()
 }
 
 // ── 通過点のドラッグ ──────────────────────────────────────────────────

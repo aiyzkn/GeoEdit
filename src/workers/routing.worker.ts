@@ -22,6 +22,12 @@ async function handle(req: RoutingWorkerRequest) {
     if (req.type === 'snap') {
       const point = cancelled.has(req.id) ? null : await router.snap({ lat: req.lat, lng: req.lng }, req.options, ac.signal)
       post({ type: 'snap', id: req.id, point })
+    } else if (req.type === 'match') {
+      const result = cancelled.has(req.id)
+        ? null
+        : await router.matchTrack(req.points, req.options, req.match, ac.signal, (done, total) =>
+            post({ type: 'progress', id: req.id, done, total }))
+      post({ type: 'match', id: req.id, result })
     } else {
       const result = cancelled.has(req.id)
         ? { status: 'fallback' as const, points: [req.from, req.to], distance: 0, reason: 'aborted' as const }

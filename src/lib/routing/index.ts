@@ -12,7 +12,7 @@ import { snapToGraph } from './snap.ts'
 import { DEFAULT_MATCH_PARAMS, matchTrack as matchTrackOnGraph, type MatchParams } from './match.ts'
 import type { FallbackReason, GraphPos, LatLng, RouteResult, RoutingOptions, SearchStep, TileBytesLoader } from './types.ts'
 
-export type { FallbackReason, LatLng, RouteResult, RoutingOptions } from './types.ts'
+export type { FallbackReason, LatLng, RoadClass, RouteResult, RoutingOptions } from './types.ts'
 export { DEFAULT_MATCH_PARAMS, type MatchParams } from './match.ts'
 
 /** トラックのマップマッチングの結果の区間。input は入力の点の番号の範囲（両端を含む） */
