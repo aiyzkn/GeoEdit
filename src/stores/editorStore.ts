@@ -4,8 +4,14 @@ import type { EditMode, UndoEntry, SelectionRange, Draft } from '@/types/editor'
 import type { RouteData, TrackPoint } from '@/types/route'
 import { emptyDraft } from '@/lib/editors/draft'
 import { ROUTING_SETTINGS_KEY, sanitizeSettings, type RoutingSettings } from '@/lib/routing/settings'
+import { WALK, type SpeedProfile } from '@/lib/editors/routeEditors'
 
 const MAX_UNDO = 50
+
+export interface DraftProfile {
+  points: { lat: number; lng: number; ele?: number }[]
+  complete: boolean
+}
 /** 作成中の下書きの取り消し履歴の上限（designs/経路探索詳細設計書.md §8.3） */
 const MAX_DRAFT_HISTORY = 100
 
@@ -50,6 +56,15 @@ interface EditorState {
   routingSettings: RoutingSettings
   /** 道路データの取得の進み具合（取得中だけ） */
   routingProgress: { done: number; total: number } | null
+  /** 時刻の割り振りの速度（セッションの間だけ。B3） */
+  speedProfile: SpeedProfile
+  /** 作成モード: 標高を自動取得する / 経路探索の区間を形を保って間引く（B4・B5） */
+  createAutoElevation: boolean
+  createSimplify: boolean
+  /** 作成中の下書きの断面（点列と標高）。complete = すべての区間の標高がそろっている（B5） */
+  draftProfile: DraftProfile | null
+  /** 標高グラフでマウスを乗せている、下書きの点の番号 */
+  draftHoverIndex: number | null
   // 作成モードのマップマッチング（designs/マップマッチング設計書.md）。セッション内のみ保持
   mapMatchEnabled: boolean
   mergeTargetIds: [string | null, string | null]
@@ -74,6 +89,11 @@ interface EditorActions {
   clearDraft: () => void
   setRoutingSettings: (patch: Partial<RoutingSettings>) => void
   setRoutingProgress: (p: { done: number; total: number } | null) => void
+  setSpeedProfile: (p: SpeedProfile) => void
+  setCreateAutoElevation: (v: boolean) => void
+  setCreateSimplify: (v: boolean) => void
+  setDraftProfile: (p: DraftProfile | null) => void
+  setDraftHoverIndex: (i: number | null) => void
   setMapMatchEnabled: (enabled: boolean) => void
   toggleMergeTarget: (routeId: string) => void
   startPartialEdit: (state: PartialEditState) => void
@@ -111,6 +131,11 @@ export const useEditorStore = create<EditorState & EditorActions>()(
     draftFuture: [],
     routingSettings: loadRoutingSettings(),
     routingProgress: null,
+    speedProfile: WALK,
+    createAutoElevation: true,
+    createSimplify: true,
+    draftProfile: null,
+    draftHoverIndex: null,
     mapMatchEnabled: true,
     mergeTargetIds: [null, null],
     partialEdit: null,
@@ -126,6 +151,8 @@ export const useEditorStore = create<EditorState & EditorActions>()(
           state.draftPast = []
           state.draftFuture = []
           state.routingProgress = null
+          state.draftProfile = null
+          state.draftHoverIndex = null
         }
         if (mode !== 'merge') {
           state.mergeTargetIds = [null, null]
@@ -256,6 +283,31 @@ export const useEditorStore = create<EditorState & EditorActions>()(
     setRoutingProgress: (p) =>
       set((state) => {
         state.routingProgress = p
+      }),
+
+    setSpeedProfile: (p) =>
+      set((state) => {
+        state.speedProfile = p
+      }),
+
+    setCreateAutoElevation: (v) =>
+      set((state) => {
+        state.createAutoElevation = v
+      }),
+
+    setCreateSimplify: (v) =>
+      set((state) => {
+        state.createSimplify = v
+      }),
+
+    setDraftProfile: (p) =>
+      set((state) => {
+        state.draftProfile = p
+      }),
+
+    setDraftHoverIndex: (i) =>
+      set((state) => {
+        state.draftHoverIndex = i
       }),
 
     setMapMatchEnabled: (enabled) =>

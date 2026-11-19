@@ -241,6 +241,24 @@ export default function CreateRouteLayer({ map }: Props) {
     })
   }, [draft, map])
 
+  // 標高グラフで、下書きの点にマウスを乗せているとき、その位置に印を出す（B5）
+  const hoverIndex = useEditorStore((s) => s.draftHoverIndex)
+  const hoverMarker = useRef<L.CircleMarker | null>(null)
+  useEffect(() => {
+    const prof = useEditorStore.getState().draftProfile
+    const p = hoverIndex != null ? prof?.points[hoverIndex] : undefined
+    if (!p) {
+      if (hoverMarker.current) { map.removeLayer(hoverMarker.current); hoverMarker.current = null }
+      return
+    }
+    if (!hoverMarker.current) {
+      hoverMarker.current = L.circleMarker([p.lat, p.lng], { radius: 6, color: '#ef4444', weight: 2, fillColor: '#fff', fillOpacity: 1, interactive: false }).addTo(map)
+    } else {
+      hoverMarker.current.setLatLng([p.lat, p.lng])
+    }
+  }, [hoverIndex, map])
+  useEffect(() => () => { if (hoverMarker.current) { map.removeLayer(hoverMarker.current); hoverMarker.current = null } }, [map])
+
   // アンマウント時に全部外す
   useEffect(() => {
     const ms = markers.current

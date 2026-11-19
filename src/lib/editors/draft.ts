@@ -4,6 +4,7 @@
 import type { CreateAnchor, CreateLeg, Draft, LegMode } from '../../types/editor.ts'
 import type { RouteResult } from '../routing/types.ts'
 import { distanceLL } from '../routing/geo.ts'
+import { simplifyByTolerance } from './routeEditors.ts'
 
 type LL = { lat: number; lng: number }
 
@@ -135,6 +136,21 @@ export function draftPoints(d: Draft): LL[] {
     }
   }
   return out
+}
+
+/** 形を保つ間引きの許容（m）。経路探索で結んだ区間にだけ使う（B4） */
+export const DRAFT_SIMPLIFY_M = 2
+
+/** 区間 leg の点列。simplify なら、経路探索で結べた区間（auto・ok）を形を保って間引く。両端は必ず残る */
+export function legPoints(leg: CreateLeg, simplify: boolean): LL[] {
+  if (simplify && leg.mode === 'auto' && leg.status === 'ok') return simplifyByTolerance(leg.points, DRAFT_SIMPLIFY_M)
+  return leg.points
+}
+
+/** draftPoints と同じ。simplify なら区間ごとに間引く */
+export function draftPointsSimplified(d: Draft, simplify: boolean): LL[] {
+  if (!simplify) return draftPoints(d)
+  return draftPoints({ anchors: d.anchors, legs: d.legs.map((l) => ({ ...l, points: legPoints(l, true) })) })
 }
 
 export function draftDistance(d: Draft): number {
