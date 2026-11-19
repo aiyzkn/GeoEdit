@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { PanelRightClose } from 'lucide-react'
 import LayerPanel from './LayerPanel'
 import RouteList from './RouteList'
 import PropertiesPanel from './PropertiesPanel'
@@ -8,11 +9,13 @@ import { useEditorStore } from '@/stores/editorStore'
 interface Props {
   /** px。モバイルの下からのシートでは '100%'（D5） */
   width: number | '100%'
+  /** PC 幅で、パネルを折りたたむ（無ければボタンを出さない） */
+  onCollapse?: () => void
 }
 
 type Tab = 'routes' | 'layers' | 'properties' | 'stats'
 
-export default function RightSidebar({ width }: Props) {
+export default function RightSidebar({ width, onCollapse }: Props) {
   const [tab, setTab] = useState<Tab>('routes')
   const mode = useEditorStore((s) => s.mode)
 
@@ -41,6 +44,16 @@ export default function RightSidebar({ width }: Props) {
             {label}
           </button>
         ))}
+        {onCollapse && (
+          <button
+            onClick={onCollapse}
+            aria-label="右側のパネルを折りたたむ"
+            title="右側のパネルを折りたたむ（ヘッダーの右端のボタンで開く）"
+            className="px-1.5 text-[var(--color-muted)] hover:text-[var(--color-fg)] transition-colors"
+          >
+            <PanelRightClose size={14} />
+          </button>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
         {tab === 'routes' && <RouteList />}

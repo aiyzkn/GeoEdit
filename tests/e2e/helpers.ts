@@ -96,7 +96,7 @@ export async function mockExternalNetwork(page: Page) {
 export async function openFilesViaButton(page: Page, fixtureNames: string | string[]) {
   const files = (Array.isArray(fixtureNames) ? fixtureNames : [fixtureNames]).map(fixture)
   const chooserPromise = page.waitForEvent('filechooser')
-  await page.getByRole('button', { name: '開く' }).click()
+  await page.getByRole('button', { name: '開く', exact: true }).click()
   const chooser = await chooserPromise
   await chooser.setFiles(files)
 }
