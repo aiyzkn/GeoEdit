@@ -21,7 +21,7 @@ test('時刻再計算: 一定の速度を選ぶと、所要時間がその速度
   await setup(page)
   await openFilesViaButton(page, 'sample.gpx')
   await expect(page.getByText('5 pts · 1 trk')).toBeVisible()
-  await selectMode(page, '時刻編集')
+  await selectMode(page, '時間変更')
   await page.getByRole('combobox', { name: '速度' }).selectOption('constant')
   await page.getByRole('spinbutton', { name: '一定の速度（km/h）' }).fill('36')
   await page.getByRole('spinbutton', { name: '一定の速度（km/h）' }).press('Enter')

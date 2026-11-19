@@ -54,7 +54,6 @@ export type EditMode =
   | 'reverse'
   | 'elevReplace'
   | 'pointInfo'
-  | 'export'
 
 export interface UndoEntry {
   description: string

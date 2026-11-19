@@ -29,6 +29,8 @@ interface UiState {
   sidebarOpen: boolean
   /** 表示中の確認ダイアログ */
   confirmRequest: ConfirmRequest | null
+  /** 選択中のルートの出力ダイアログ（ヘッダーの「出力」。D3） */
+  showExport: boolean
 }
 
 interface UiActions {
@@ -43,6 +45,7 @@ interface UiActions {
   setSidebarOpen: (open: boolean) => void
   /** 確認ダイアログを出し、押されたボタンの id を返す。Esc・外側のクリックは null */
   confirm: (req: ConfirmRequest) => Promise<string | null>
+  setShowExport: (show: boolean) => void
 }
 
 const THEME_KEY = 'gpx-editor-theme'
@@ -84,6 +87,7 @@ export const useUiStore = create<UiState & UiActions>()(
     sidebarWidth: 240,
     toasts: [],
     confirmRequest: null,
+    showExport: false,
     showHelp: false,
     openAsKind: 'track',
     sidebarOpen: false,
@@ -134,6 +138,11 @@ export const useUiStore = create<UiState & UiActions>()(
     setSidebarOpen: (open) =>
       set((state) => {
         state.sidebarOpen = open
+      }),
+
+    setShowExport: (show) =>
+      set((state) => {
+        state.showExport = show
       }),
 
     confirm: (req) =>

@@ -26,9 +26,9 @@ test('逆順: トラックを反転し、時刻データが除去される', asy
   await expect(page.getByText(/総所要時間/)).toBeVisible()
   await expect(page.getByText('—（時刻データなし）')).toBeHidden()
 
-  await selectMode(page, '逆順')
-  await page.getByRole('button', { name: '逆順にする' }).click()
-  await expect(page.getByText('トラックを逆順にしました')).toBeVisible()
+  await selectMode(page, '逆ルート')
+  await page.getByRole('button', { name: '逆ルートにする' }).click()
+  await expect(page.getByText('逆ルートにしました')).toBeVisible()
 
   // 逆順は時刻を除去する（reverseTrack の仕様）→ 総所要時間が「—（時刻データなし）」に
   await switchTab(page, '統計')
@@ -53,7 +53,7 @@ test('時刻再計算: トーストが表示される', async ({ page }) => {
   await openFilesViaButton(page, 'sample.gpx')
   await expect(page.getByText('5 pts · 1 trk')).toBeVisible()
 
-  await selectMode(page, '時刻編集')
+  await selectMode(page, '時間変更')
   // 既定は「一括再計算」サブモード、開始日時はページ読込時刻で初期化済み。そのまま実行
   await page.getByRole('button', { name: '時刻再計算', exact: true }).click()
   await expect(page.getByText('時刻を再計算しました')).toBeVisible()
@@ -93,7 +93,7 @@ test('区間削除: タイムラインで開始・終了点を選び区間を削
   await openFilesViaButton(page, 'sample.gpx')
   await expect(page.getByText('5 pts · 1 trk')).toBeVisible()
 
-  await selectMode(page, '区間削除')
+  await selectMode(page, '部分削除')
   // #1 と #3 をクリック → 選択範囲 [1→3]
   await selectTimelinePoint(page, 1)
   await selectTimelinePoint(page, 3)
@@ -101,7 +101,7 @@ test('区間削除: タイムラインで開始・終了点を選び区間を削
   await page.getByRole('button', { name: '削除実行' }).click()
 
   // インデックス1〜3の3点が削除され、5-3=2点になる
-  await expect(page.getByText(/区間削除: 3 ポイント削除/)).toBeVisible()
+  await expect(page.getByText(/部分削除: 3 ポイント削除/)).toBeVisible()
   await expect(page.getByText('2 pts · 1 trk')).toBeVisible()
 })
 

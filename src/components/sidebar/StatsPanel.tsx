@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useRouteStore } from '@/stores/routeStore'
 import { computeRouteStats } from '@/lib/routeStats'
 
@@ -11,7 +12,7 @@ function fmtDuration(ms: number) {
 }
 
 export default function StatsPanel() {
-  const { routes, selectedRouteId } = useRouteStore()
+  const { routes, selectedRouteId } = useRouteStore(useShallow((s) => ({ routes: s.routes, selectedRouteId: s.selectedRouteId })))
   const route = routes.find((r) => r.id === selectedRouteId)
 
   const stats = useMemo(() => (route ? computeRouteStats(route) : null), [route])

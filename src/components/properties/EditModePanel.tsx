@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useEditorStore } from '@/stores/editorStore'
+import { useShallow } from 'zustand/react/shallow'
 import { useRouteStore } from '@/stores/routeStore'
 import { useUiStore } from '@/stores/uiStore'
 import {
@@ -10,7 +11,6 @@ import {
 } from '@/lib/editors/routeEditors'
 import { fetchElevations } from '@/lib/elevationApi'
 import { useElevReplace } from '@/hooks/useElevReplace'
-import ExportDialog from '@/components/common/ExportDialog'
 import RoutingSettingsDialog from '@/components/properties/RoutingSettingsDialog'
 import { draftPointsSimplified, draftDistance, DRAFT_SIMPLIFY_M } from '@/lib/editors/draft'
 import { computeGainLoss } from '@/lib/routeStats'
@@ -31,7 +31,7 @@ function toLocalDatetimeInputValue(d: Date): string {
 export default function EditModePanel() {
   const { mode, setMode, selection, setSelection, pushUndo, draft, clearDraft, routingSettings, setRoutingSettings, routingProgress, setBusy, mergeTargetIds, partialEdit, clearPartialEdit, mapMatchEnabled, setMapMatchEnabled, speedProfile, setSpeedProfile, createAutoElevation: autoElevation, setCreateAutoElevation: setAutoElevation, createSimplify, setCreateSimplify, draftProfile, draftTarget } = useEditorStore()
   useDraftProfileSync()
-  const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, updateRoute, addRoute, removeRoute } = useRouteStore()
+  const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, updateRoute, addRoute, removeRoute } = useRouteStore(useShallow((s) => ({ routes: s.routes, selectedRouteId: s.selectedRouteId, selectedTrackIndex: s.selectedTrackIndex, selectedPointIndex: s.selectedPointIndex, updateRoute: s.updateRoute, addRoute: s.addRoute, removeRoute: s.removeRoute })))
   const { addToast } = useUiStore()
   const { replaceElevations } = useElevReplace()
 
@@ -46,7 +46,6 @@ export default function EditModePanel() {
   const [shiftTimeStr, setShiftTimeStr] = useState('')
   const [newName, setNewName] = useState(route?.name ?? '')
   const [trackNamesText, setTrackNamesText] = useState(() => (route?.tracks ?? []).map(trackToNameLine).join('\n'))
-  const [showExport, setShowExport] = useState(false)
   const [createRouteName, setCreateRouteName] = useState('')
   const [createTrackName, setCreateTrackName] = useState('')
   // ページロード時点の日時を既定値にする（リアルタイム更新はしない。EditModePanel はアプリ全体で1度だけマウントされるため useState の初期化関数のみで足りる）
@@ -105,6 +104,14 @@ export default function EditModePanel() {
     return parts.join(' ・ ')
   })()
 
+  // Enter で、いまのモードの主な確定（D4）。実際の処理は、早い return より後で決まるので ref で渡す
+  const modeConfirmRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    const onConfirm = () => modeConfirmRef.current()
+    document.addEventListener('mode-confirm', onConfirm)
+    return () => document.removeEventListener('mode-confirm', onConfirm)
+  }, [])
+
   // 「確定して移動」（C3）: ツールバー・Esc の確認ダイアログから来る。フックは早い return より前に置く
   const confirmRef = useRef<(then: EditMode) => Promise<boolean>>(async () => false)
   useEffect(() => {
@@ -162,20 +169,20 @@ export default function EditModePanel() {
     let end = sel.endIndex
     if (kind === 'toStart') { start = 0; end = sel.startIndex }
     if (kind === 'toEnd') { start = sel.startIndex; end = track.points.length - 1 }
-    pushUndo('区間削除', snapshot())
+    pushUndo('部分削除', snapshot())
     const pts = deleteRange(track.points, start, end)
     updateRoute(route.id, (r) => { r.tracks[selectedTrackIndex].points = pts })
-    addToast('success', `区間削除: ${Math.abs(end - start) + 1} ポイント削除`)
+    addToast('success', `部分削除: ${Math.abs(end - start) + 1} ポイント削除`)
     setSelection(null)
     setMode('none')
   }
 
   const handleReverse = () => {
     if (!track) return
-    pushUndo('逆順', snapshot())
+    pushUndo('逆ルート', snapshot())
     const pts = reverseTrack(track.points)
     updateRoute(route.id, (r) => { r.tracks[selectedTrackIndex].points = pts })
-    addToast('success', 'トラックを逆順にしました')
+    addToast('success', '逆ルートにしました')
     setMode('none')
   }
 
@@ -222,10 +229,10 @@ export default function EditModePanel() {
         return
       }
       if (end.getTime() <= start.getTime()) { addToast('error', '終了日時は開始日時より後にしてください'); return }
-      pushUndo('時刻再計算', snapshot())
+      pushUndo('時間変更', snapshot())
       pts = redistributeTimeWithRange(track.points, start, end, speedProfile)
     } else {
-      pushUndo('時刻再計算', snapshot())
+      pushUndo('時間変更', snapshot())
       pts = redistributeTime(track.points, start, speedProfile)
     }
     updateRoute(route.id, (r) => { r.tracks[selectedTrackIndex].points = pts })
@@ -239,7 +246,7 @@ export default function EditModePanel() {
       addToast('info', '日付または開始時刻を指定してください')
       return
     }
-    pushUndo('時刻シフト', snapshot())
+    pushUndo('時間変更（シフト）', snapshot())
     const pts = shiftTime(track.points, shiftDateStr || undefined, shiftTimeStr || undefined)
     updateRoute(route.id, (r) => { r.tracks[selectedTrackIndex].points = pts })
     addToast('success', '時刻をシフトしました')
@@ -411,6 +418,34 @@ export default function EditModePanel() {
 
   confirmRef.current = handleCreateConfirm
 
+  modeConfirmRef.current = () => {
+    // 処理の最中は何もしない（二重の確定を防ぐ）
+    if (useEditorStore.getState().isBusy || creating || replacing) return
+    switch (mode) {
+      case 'create':
+        void handleCreateConfirm()
+        break
+      case 'reroute':
+        if (draftTarget.kind === 'replace') void handleCreateConfirm()
+        else if (selection && selection.startIndex !== selection.endIndex) {
+          if (!startReplace(selection.routeId, selection.trackIndex, selection.startIndex, selection.endIndex)) addToast('info', '始点と終点に、違う点を選んでください')
+        }
+        break
+      case 'split': handleSplit(); break
+      case 'deleteRange':
+        if (selection && selection.startIndex !== selection.endIndex) handleDeleteRange('range')
+        break
+      case 'merge': handleMerge(); break
+      case 'partialEdit': if (partialEdit) handlePartialEditConfirm(); break
+      case 'thinOut': handleThinOut(); break
+      case 'timeEdit': if (timeEditSubMode === 'recalc') handleTimeEdit(); else handleTimeShift(); break
+      case 'reverse': handleReverse(); break
+      case 'elevReplace': void handleElevReplace(); break
+      case 'rename': handleRename(); break
+      default: break
+    }
+  }
+
   return (
     <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs space-y-2">
       {mode === 'reroute' && draftTarget.kind !== 'replace' && (
@@ -467,6 +502,7 @@ export default function EditModePanel() {
           <input
             type="text"
             placeholder="ルート名"
+            aria-label="ルート名"
             value={createRouteName}
             onChange={(e) => setCreateRouteName(e.target.value)}
             className="px-2 py-1 border border-[var(--color-border)] rounded bg-[var(--color-bg)] text-[var(--color-fg)] w-32"
@@ -474,6 +510,7 @@ export default function EditModePanel() {
           <input
             type="text"
             placeholder="トラック名"
+            aria-label="トラック名"
             value={createTrackName}
             onChange={(e) => setCreateTrackName(e.target.value)}
             className="px-2 py-1 border border-[var(--color-border)] rounded bg-[var(--color-bg)] text-[var(--color-fg)] w-32"
@@ -483,6 +520,7 @@ export default function EditModePanel() {
             value={createStartStr}
             onChange={(e) => setCreateStartStr(e.target.value)}
             title="開始日時（任意）"
+            aria-label="開始日時（任意）"
             className="px-1 py-1 border border-[var(--color-border)] rounded bg-[var(--color-bg)] text-[var(--color-fg)]"
           />
           <input
@@ -490,6 +528,7 @@ export default function EditModePanel() {
             value={createEndStr}
             onChange={(e) => setCreateEndStr(e.target.value)}
             title="終了日時（任意・同一日付内のみ）"
+            aria-label="終了日時（任意・同一日付内のみ）"
             className="px-1 py-1 border border-[var(--color-border)] rounded bg-[var(--color-bg)] text-[var(--color-fg)]"
           />
             </>
@@ -606,7 +645,7 @@ export default function EditModePanel() {
       )}
       {mode === 'deleteRange' && (
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[var(--color-muted)]">区間削除:</span>
+          <span className="text-[var(--color-muted)]">部分削除:</span>
           <span>地図またはタイムラインで開始・終了ポイントをクリック（再クリックでキャンセル）</span>
           {selection && selection.startIndex === selection.endIndex && (
             <>
@@ -625,17 +664,17 @@ export default function EditModePanel() {
       )}
       {mode === 'reverse' && (
         <div className="flex items-center gap-2">
-          <span className="text-[var(--color-muted)]">逆順:</span>
-          <button onClick={handleReverse} className="px-2 py-1 bg-orange-600 text-white rounded hover:bg-orange-500">逆順にする</button>
+          <span className="text-[var(--color-muted)]">逆ルート:</span>
+          <button onClick={handleReverse} className="px-2 py-1 bg-orange-600 text-white rounded hover:bg-orange-500">逆ルートにする</button>
         </div>
       )}
       {mode === 'pointInfo' && (
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[var(--color-muted)]">詳細:</span>
+          <span className="text-[var(--color-muted)]">ポイント情報:</span>
           {track && selectedPointIndex != null ? (
-            <span>選択中のポイント #{selectedPointIndex} の詳細を右サイドバーの「属性」タブに表示しています（緯度経度・標高・時刻は編集可能）</span>
+            <span>選択中のポイント #{selectedPointIndex} の情報を右サイドバーの「属性」タブに表示しています（緯度経度・標高・時刻は編集可能）</span>
           ) : (
-            <span>地図またはタイムラインでポイントをクリックすると、右サイドバーの「属性」タブに詳細情報が表示されます</span>
+            <span>地図またはタイムラインでポイントをクリックすると、右サイドバーの「属性」タブにポイント情報が表示されます</span>
           )}
         </div>
       )}
@@ -860,17 +899,6 @@ export default function EditModePanel() {
             <span>ルート上をクリックして編集範囲を選択（前後300点・最大601点）</span>
           )}
         </div>
-      )}
-      {mode === 'export' && route && (
-        <>
-          <button
-            onClick={() => setShowExport(true)}
-            className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-500"
-          >
-            エクスポートダイアログを開く
-          </button>
-          {showExport && <ExportDialog route={route} onClose={() => { setShowExport(false); setMode('none') }} />}
-        </>
       )}
     </div>
   )

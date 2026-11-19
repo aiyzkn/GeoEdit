@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useRouteStore } from '@/stores/routeStore'
 import { markClean } from '@/lib/persistence/dirty'
-import { Download } from 'lucide-react'
+import { Download, Copy } from 'lucide-react'
 import type { RouteData } from '@/types/route'
 import type { ExportOptions, GpxOutputMode } from '@/types/editor'
 import { useFileExporter, defaultExportFileName } from '@/hooks/useFileExporter'
@@ -23,7 +23,7 @@ export default function ExportDialog({ route, onClose }: Props) {
   const [format, setFormat] = useState<ExportOptions['format']>('gpx')
   const [gpxMode, setGpxMode] = useState<GpxOutputMode>('original')
   const [fileName, setFileName] = useState(() => defaultExportFileName(route))
-  const { exportRoute } = useFileExporter()
+  const { exportRoute, copyRoute } = useFileExporter()
 
   const handleExport = () => {
     exportRoute(route, { format, gpxMode }, fileName)
@@ -88,13 +88,23 @@ export default function ExportDialog({ route, onClose }: Props) {
           </div>
         </div>
 
-        <button
-          onClick={handleExport}
-          className="w-full flex items-center justify-center gap-2 py-2 rounded bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 transition-colors"
-        >
-          <Download size={14} />
-          ダウンロード
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleExport}
+            className="flex-1 flex items-center justify-center gap-2 py-2 rounded bg-blue-600 text-white text-sm font-medium hover:bg-blue-500 transition-colors"
+          >
+            <Download size={14} />
+            ダウンロード
+          </button>
+          <button
+            onClick={() => { void copyRoute(route, { format, gpxMode }) }}
+            className="flex items-center justify-center gap-1.5 px-3 py-2 rounded bg-[var(--color-border)] text-[var(--color-fg)] text-sm hover:opacity-80 transition-colors"
+            title="選んでいる形式で、クリップボードへコピー"
+          >
+            <Copy size={14} />
+            コピー
+          </button>
+        </div>
       </div>
     </Modal>
   )

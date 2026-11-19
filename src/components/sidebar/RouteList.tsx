@@ -1,5 +1,6 @@
 import { Trash2, Download, ChevronRight, Route as RouteIcon, Milestone, MapPin } from 'lucide-react'
 import { isRouteDirty, useCleanStore } from '@/lib/persistence/dirty'
+import { useShallow } from 'zustand/react/shallow'
 import { useRouteStore } from '@/stores/routeStore'
 import { useEditorStore } from '@/stores/editorStore'
 import ExportDialog from '@/components/common/ExportDialog'
@@ -18,7 +19,7 @@ const KIND_ICON: Record<RouteKind, React.ReactNode> = {
 
 export default function RouteList() {
   const clean = useCleanStore((st) => st.clean)
-  const { routes, selectedRouteId, selectRoute, removeRoute, updateRoute } = useRouteStore()
+  const { routes, selectedRouteId, selectRoute, removeRoute, updateRoute } = useRouteStore(useShallow((s) => ({ routes: s.routes, selectedRouteId: s.selectedRouteId, selectRoute: s.selectRoute, removeRoute: s.removeRoute, updateRoute: s.updateRoute })))
   const { mode, mergeTargetIds, toggleMergeTarget, pushUndo } = useEditorStore()
   const [exportRoute, setExportRoute] = useState<RouteData | null>(null)
 

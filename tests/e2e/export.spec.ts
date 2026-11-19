@@ -105,16 +105,36 @@ test('ファイル名を編集してエクスポートできる', async ({ page 
   await expect(page.getByText('エクスポート完了: my-custom-name.gpx')).toBeVisible()
 })
 
-test('編集ツールバーの「出力」モードからもエクスポートできる', async ({ page }) => {
+test('ヘッダーの「出力」から、選択中のルートを直接エクスポートできる', async ({ page }) => {
+  // ルートを選んでいなければ押せない
+  await expect(page.getByRole('button', { name: '出力', exact: true })).toBeDisabled()
   await openFilesViaButton(page, 'sample.gpx')
   await expect(page.getByText('5 pts · 1 trk')).toBeVisible()
 
-  // ツールバーの「出力」→ パネルの「エクスポートダイアログを開く」
-  await selectMode(page, '出力')
-  await page.getByRole('button', { name: 'エクスポートダイアログを開く' }).click()
+  // ヘッダーの「出力」→ すぐにエクスポートダイアログ（モードを経由しない）
+  await page.getByRole('button', { name: '出力', exact: true }).click()
 
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByRole('heading', { name: 'エクスポート' })).toBeVisible()
   const { dl } = await download(page, dialog)
   expect(dl.suggestedFilename()).toBe('sample_ed.gpx')
+})
+
+test('コピー: 選んでいる形式の文字列が、ダウンロードと同じ中身でクリップボードに入る', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await openFilesViaButton(page, 'sample.gpx')
+  await expect(page.getByText('5 pts · 1 trk')).toBeVisible()
+  await page.getByRole('button', { name: '出力', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('button', { name: 'GEOJSON', exact: true }).click()
+  await dialog.getByRole('button', { name: 'コピー', exact: true }).click()
+  await expect(page.getByText(/^GeoJSON をコピーしました（[\d.]+ (B|KB)）$/)).toBeVisible()
+  const text = await page.evaluate(() => navigator.clipboard.readText())
+  const json = JSON.parse(text)
+  expect(json.type).toBe('FeatureCollection')
+  // ダウンロードと同じ中身
+  const { content } = await download(page, dialog)
+  // Windows のクリップボードは改行を CRLF にするので、改行をそろえて比べる
+  const norm = (t: string) => t.replace(/\r\n/g, '\n')
+  expect(norm(content)).toBe(norm(text))
 })

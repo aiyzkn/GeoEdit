@@ -67,7 +67,7 @@ export default function MapPane() {
   const tileRef = useRef<L.Layer | null>(null)
   const overlayLayersRef = useRef<Map<string, L.TileLayer>>(new Map())
   const { setMapInstance, baseLayerId, activeOverlays } = useMapStore()
-  const { routes } = useRouteStore()
+  const routes = useRouteStore((s) => s.routes)
   const { mode } = useEditorStore()
   const { isDragOver, onDragOver, onDragLeave, onDrop } = useDropZone()
 

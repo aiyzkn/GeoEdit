@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Trash2 } from 'lucide-react'
+import { useShallow } from 'zustand/react/shallow'
 import { useRouteStore } from '@/stores/routeStore'
 import { useEditorStore } from '@/stores/editorStore'
 import { useUiStore } from '@/stores/uiStore'
@@ -133,7 +134,11 @@ const TimelineCard = memo(function TimelineCard({
 
 export default function VirtualTimeline() {
   const containerRef = useRef<HTMLDivElement>(null)
-  const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, selectPoint, hoverPoint, updateRoute } = useRouteStore()
+  // ストア全体ではなく、使う値だけを購読する（ホバーのたびに描き直さないように。E3）
+  const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, selectPoint, hoverPoint, updateRoute } = useRouteStore(useShallow((s) => ({
+    routes: s.routes, selectedRouteId: s.selectedRouteId, selectedTrackIndex: s.selectedTrackIndex,
+    selectedPointIndex: s.selectedPointIndex, selectPoint: s.selectPoint, hoverPoint: s.hoverPoint, updateRoute: s.updateRoute,
+  })))
   const { mode, selection, pushUndo, toggleDeleteRangeMarker } = useEditorStore()
   const { addToast } = useUiStore()
   const isVertical = useBreakpoint() === 'mobile'
@@ -231,6 +236,7 @@ export default function VirtualTimeline() {
     if (!el || points.length === 0) return
     let rafId: number | null = null
     const handler = () => {
+      lastScrollAt.current = performance.now()
       if (rafId != null) return
       rafId = requestAnimationFrame(() => {
         rafId = null
@@ -252,6 +258,16 @@ export default function VirtualTimeline() {
     virtualizer.scrollToIndex(clamped, { align: 'start' })
     setScrollIndex(clamped)
   }
+
+  // カードの React.memo が効くよう、関数は描き直しのたびに作り直さない（E3）
+  const handleHoverLeave = useCallback(() => hoverPoint(null), [hoverPoint])
+  // スクロール中は、カードがマウスの下を流れていくだけでホバーが起きる。そのたびに地図・グラフまで描き直すと
+  // 重いので、スクロールが止まってから 150 ms はホバーを受けない（E3）
+  const lastScrollAt = useRef(0)
+  const handleHoverEnter = useCallback((index: number) => {
+    if (performance.now() - lastScrollAt.current < 150) return
+    hoverPoint(index)
+  }, [hoverPoint])
 
   const handleCommitLatLng = useCallback((index: number, field: 'lat' | 'lng', value: number) => {
     if (!route || isNaN(value)) return
@@ -307,8 +323,8 @@ export default function VirtualTimeline() {
                   ? { position: 'absolute', top: item.start, left: 0, right: 0, height: ROW_HEIGHT }
                   : { position: 'absolute', left: item.start, width: CARD_WIDTH }}
                 onCardClick={handleCardClick}
-                onHoverEnter={hoverPoint}
-                onHoverLeave={() => hoverPoint(null)}
+                onHoverEnter={handleHoverEnter}
+                onHoverLeave={handleHoverLeave}
                 onCommitLatLng={handleCommitLatLng}
               />
             )

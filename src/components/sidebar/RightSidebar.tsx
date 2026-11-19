@@ -6,7 +6,8 @@ import StatsPanel from './StatsPanel'
 import { useEditorStore } from '@/stores/editorStore'
 
 interface Props {
-  width: number
+  /** px。モバイルの下からのシートでは '100%'（D5） */
+  width: number | '100%'
 }
 
 type Tab = 'routes' | 'layers' | 'properties' | 'stats'
@@ -15,7 +16,7 @@ export default function RightSidebar({ width }: Props) {
   const [tab, setTab] = useState<Tab>('routes')
   const mode = useEditorStore((s) => s.mode)
 
-  // 「詳細」モードに入ったら、詳細情報が表示される属性タブへ自動的に切り替える
+  // 「ポイント情報」モードに入ったら、詳細情報が表示される属性タブへ自動的に切り替える
   // （ポイントをクリックしても右パネルが変わらず「何も表示されない」ように見える問題への対応）
   useEffect(() => {
     if (mode === 'pointInfo') setTab('properties')
@@ -23,7 +24,7 @@ export default function RightSidebar({ width }: Props) {
 
   return (
     <div
-      className="flex flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)] shrink-0 overflow-hidden"
+      className={`flex flex-col bg-[var(--color-surface)] shrink-0 overflow-hidden ${width === '100%' ? '' : 'border-l border-[var(--color-border)]'}`}
       style={{ width }}
     >
       <div className="flex border-b border-[var(--color-border)] shrink-0">

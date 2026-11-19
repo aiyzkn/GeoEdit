@@ -66,3 +66,9 @@
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-muted);
 }
+
+/* キーボードで操作したときのフォーカスの輪郭（designs/機能追加・UI改善設計書.md D6） */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 1px;
+}

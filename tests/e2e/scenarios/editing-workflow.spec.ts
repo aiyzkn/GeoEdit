@@ -27,9 +27,9 @@ test('S1: 読込→逆順→間引き→Undo→GPX出力（編集ログの一連
   await expect(page.getByText('5 pts · 1 trk')).toBeVisible()
 
   // §6.10 逆ルート: 時刻データが除去される
-  await selectMode(page, '逆順')
-  await page.getByRole('button', { name: '逆順にする' }).click()
-  await expect(page.getByText('トラックを逆順にしました')).toBeVisible()
+  await selectMode(page, '逆ルート')
+  await page.getByRole('button', { name: '逆ルートにする' }).click()
+  await expect(page.getByText('逆ルートにしました')).toBeVisible()
   await switchTab(page, '統計')
   await expect(page.getByText('—（時刻データなし）')).toBeVisible()
   await switchTab(page, 'ルート')
