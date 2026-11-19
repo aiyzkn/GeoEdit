@@ -58,7 +58,7 @@ export default function AppHeader() {
   return (
     <header className="h-[52px] flex items-center gap-1.5 md:gap-2 px-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] shrink-0 overflow-x-auto">
       <span className="hidden md:inline font-semibold text-sm text-[var(--color-fg)] mr-2 whitespace-nowrap shrink-0">
-        GeoJSON / GPX / KML Editor
+        Route Editor
       </span>
 
       <select

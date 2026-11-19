@@ -1,5 +1,5 @@
 # GeoEdit
-GeoJSON / GPX / KML エディタ
+Route Editor — GeoJSON / GPX / KML のルートを閲覧・編集するブラウザのツール
 
 ---
 

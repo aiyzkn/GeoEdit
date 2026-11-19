@@ -231,8 +231,8 @@ export default function MapPane() {
       {routes.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="text-center text-[var(--color-muted)] select-none">
-            <p className="text-lg font-medium mb-1">GeoJSON / GPX / KML</p>
-            <p className="text-sm">ファイルをドラッグ＆ドロップ、または「開く」ボタンから読み込み</p>
+            <p className="text-lg font-medium mb-1">Route Editor</p>
+            <p className="text-sm">GeoJSON / GPX / KML ファイルをドラッグ＆ドロップ、または「開く」ボタンから読み込み</p>
           </div>
         </div>
       )}
