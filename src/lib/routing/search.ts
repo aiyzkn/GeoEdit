@@ -6,6 +6,7 @@
 //   lo = max(c, valleyFloor), hi = min(top, c')
 //   罰則 = hi > lo ? valley × (hi − lo) : 0       ← 谷の深さで罰する（行きと帰りで同じ結果になる）
 //   新しい top = max(top, c')
+// ただし、有料道路・高速道路（階級 5 以上）は抜け道の勘定に入れない: 乗るときは罰則なし、乗ったら top を 0 に戻す
 
 import { haversine } from './geo.ts'
 import type { RoadGraph } from './graph.ts'
@@ -21,9 +22,8 @@ export interface SearchGraph {
   edgeCls: number[]
   nodeLat: number[]
   nodeLng: number[]
-  /** 一方通行: 1 = a → b だけ、-1 = b → a だけ、0 = 両方向。±2 は弱い一方通行（逆向きは softWrongWayCost を足して通れる）。無ければ全部 両方向 */
+  /** 一方通行: 1 = a → b だけ、-1 = b → a だけ、0 = 両方向。無ければ全部 両方向 */
   oneway?(e: number): number
-  softWrongWayCost?: number
   /** 辺 e1 を dir1 の向きに通ったあと、辺 e2 を dir2 の向きに進むときに足すコスト（m 相当。Infinity = 進めない。向きは 0 = a → b、1 = b → a）。無ければ 0 */
   turnCost?(e1: number, dir1: number, e2: number, dir2: number): number
 }
@@ -63,10 +63,23 @@ class MinHeap {
   }
 }
 
+/**
+ * 抜け道の勘定に入れない階級（有料道路・高速道路）。
+ * 高速道路に乗る・降りるのは抜け道ではない（インターチェンジの取付道路は、市区町村道のことがある。
+ * 関越道 所沢 IC の出口は、料金所 → 市区町村道 → 国道）。これらの階級に乗ると、勘定をやり直す
+ */
+export const VALLEY_EXEMPT_FROM = 5
+
 export function valleyPenalty(c: number, top: number, next: number, p: SearchParams): number {
+  if (next >= VALLEY_EXEMPT_FROM) return 0
   const lo = Math.max(c, p.valleyFloor)
   const hi = Math.min(top, next)
   return hi > lo ? p.valley * (hi - lo) : 0
+}
+
+/** 辺（階級 next）へ進んだあとの「これまでの最高の階級」。有料・高速に乗ったら 0 に戻す */
+export function nextTop(top: number, next: number): number {
+  return next >= VALLEY_EXEMPT_FROM ? 0 : Math.max(top, next)
 }
 
 interface Prev { from: number; step: SearchStep; pen: number }
@@ -98,12 +111,7 @@ export function search(
   /** 辺 e を dir の向きに通れるか（一方通行。上下線が別の線になっている道路） */
   const allowed = (e: number, dir: number) => {
     const ow = g.oneway ? g.oneway(e) : 0
-    return ow === 0 || Math.abs(ow) === 2 || (ow > 0) === (dir === 0)
-  }
-  /** 弱い一方通行（±2）を逆向きに通るときに足すコスト */
-  const wrongWay = (e: number, dir: number) => {
-    const ow = g.oneway ? g.oneway(e) : 0
-    return Math.abs(ow) === 2 && (ow > 0) !== (dir === 0) ? (g.softWrongWayCost ?? 0) : 0
+    return ow === 0 || (ow > 0) === (dir === 0)
   }
 
   const relax = (state: number, node: number, cost: number, pr: Prev) => {
@@ -119,8 +127,9 @@ export function search(
   }
 
   // 始点: 寄せた辺を、両方の向きへ（通れる向きだけ）
-  if (allowed(e0, 1)) relax((e0 * 2 + 1) * 7 + c0, g.edgeA[e0], from.t * L0 * W[c0], { from: -1, step: { edge: e0, from: from.t, to: 0 }, pen: 0 })
-  if (allowed(e0, 0)) relax((e0 * 2) * 7 + c0, g.edgeB[e0], (1 - from.t) * L0 * W[c0], { from: -1, step: { edge: e0, from: from.t, to: 1 }, pen: 0 })
+  const top0 = nextTop(0, c0)
+  if (allowed(e0, 1)) relax((e0 * 2 + 1) * 7 + top0, g.edgeA[e0], from.t * L0 * W[c0], { from: -1, step: { edge: e0, from: from.t, to: 0 }, pen: 0 })
+  if (allowed(e0, 0)) relax((e0 * 2) * 7 + top0, g.edgeB[e0], (1 - from.t) * L0 * W[c0], { from: -1, step: { edge: e0, from: from.t, to: 1 }, pen: 0 })
   // 始点と終点が同じ辺の上
   if (e0 === eG && (to.t === from.t || allowed(e0, to.t > from.t ? 0 : 1))) {
     pushGoal({ cost: Math.abs(to.t - from.t) * L0 * W[c0], from: -1, step: { edge: e0, from: from.t, to: to.t }, pen: 0 })
@@ -150,12 +159,11 @@ export function search(
         if (!allowed(e, dir)) continue
         // いま通った辺をそのまま引き返さない（行き止まりを除く）。罰則を避けるための「次の交差点まで行って戻る」を防ぐ
         if (e === e1 && g.adj[node].length > 1) continue
-        const turnOnly = g.turnCost ? g.turnCost(e1, dir1, e, dir) : 0
-        if (turnOnly === Infinity) continue
-        const turn = turnOnly + wrongWay(e, dir)
+        const turn = g.turnCost ? g.turnCost(e1, dir1, e, dir) : 0
+        if (turn === Infinity) continue
         const next = dir === 0 ? g.edgeB[e] : g.edgeA[e]
         const pen = valleyPenalty(c, top, ce, p)
-        const ntop = Math.max(top, ce)
+        const ntop = nextTop(top, ce)
         // 終点の辺へ入る
         if (e === eG) {
           const part = dir === 0 ? to.t : 1 - to.t

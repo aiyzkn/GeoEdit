@@ -1,7 +1,7 @@
 // search.ts の単体テスト（詳細設計書 §9.1）
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { search, valleyPenalty, stepsToPoints } from '../../src/lib/routing/search.ts'
+import { search, valleyPenalty, nextTop, stepsToPoints } from '../../src/lib/routing/search.ts'
 import { makeTile, graphOf, posAt, STANDARD, UNIT, type TestLine } from './helpers.ts'
 import type { RoadGraph } from '../../src/lib/routing/graph.ts'
 import type { SearchResult } from '../../src/lib/routing/types.ts'
@@ -110,14 +110,20 @@ test('谷の罰則の表（詳細設計書 §4.3）', () => {
   const p = STANDARD
   const pathPen = (seq: number[]) => {
     let c = seq[0], top = seq[0], pen = 0
-    for (const n of seq.slice(1)) { pen += valleyPenalty(c, top, n, p); top = Math.max(top, n); c = n }
+    top = nextTop(0, c)
+    for (const n of seq.slice(1)) { pen += valleyPenalty(c, top, n, p); top = nextTop(top, n); c = n }
     return pen / p.valley
   }
   assert.equal(pathPen([2, 3, 4, 3, 2]), 0) // 山型
   assert.equal(pathPen([4, 3, 4]), 1) // 抜け道
   assert.equal(pathPen([4, 2, 4]), 2)
-  assert.equal(pathPen([4, 3, 6]), 1) // (g) 取付道路は 1 段（3 段ではない）
-  assert.equal(pathPen([6, 3, 4]), 1) // その逆
+  // 高速・有料の乗り降りは抜け道ではない（勘定をやり直す）
+  assert.equal(pathPen([4, 3, 6]), 0) // 国道 → 県道の取付道路 → 高速
+  assert.equal(pathPen([6, 3, 4]), 0) // その逆
+  assert.equal(pathPen([6, 2, 4]), 0) // 料金所 → 市区町村道 → 国道（所沢 IC の出口）
+  assert.equal(pathPen([3, 6, 2, 4]), 0) // 高速に乗る前の階級は、降りた後に持ち越さない
+  assert.equal(pathPen([6, 2, 4, 2, 4]), 2) // 降りた後の一般道どうしの抜け道は数える
+  assert.equal(pathPen([4, 5, 3, 4]), 0) // 有料道路も同じ
   assert.equal(pathPen([2, 1, 2]), 0) // (i) 市道 → 里道 → 市道
   assert.equal(pathPen([3, 1, 3]), 1) // 里道は市区町村道として数える
 })
