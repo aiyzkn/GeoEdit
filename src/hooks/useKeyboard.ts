@@ -23,7 +23,7 @@ export function useKeyboard() {
         const editor = useEditorStore.getState()
         // ルート作成モード中は、下書きの操作（追加・移動・削除）の取り消しを優先する
         // （routeStore の Undo スタックは確定済みルートの操作しか記録していないため）
-        if (editor.mode === 'create' && draftUndo()) return
+        if ((editor.mode === 'create' || editor.mode === 'reroute') && draftUndo()) return
         const entry = editor.undo(useRouteStore.getState().routes)
         if (entry) {
           useRouteStore.getState().setRoutes(entry.snapshot)
@@ -31,7 +31,7 @@ export function useKeyboard() {
       } else if (mod && (key === 'y' || (e.shiftKey && key === 'z'))) {
         e.preventDefault()
         const editor = useEditorStore.getState()
-        if (editor.mode === 'create' && draftRedo()) return
+        if ((editor.mode === 'create' || editor.mode === 'reroute') && draftRedo()) return
         const entry = editor.redo(useRouteStore.getState().routes)
         if (entry) {
           useRouteStore.getState().setRoutes(entry.snapshot)

@@ -1,8 +1,7 @@
 import { useState } from 'react'
 import {
   Scissors, Trash2, Merge, GitBranch, Clock, RotateCcw,
-  Mountain, MapPin, Type, Download, Info, MousePointer, Plus, Menu, X
-} from 'lucide-react'
+  Mountain, MapPin, Type, Download, Info, MousePointer, Plus, Menu, X, Route } from 'lucide-react'
 import { useEditorStore, confirmDiscardCreatePoints } from '@/stores/editorStore'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
 import type { EditMode } from '@/types/editor'
@@ -19,6 +18,7 @@ const TOOLS: ToolDef[] = [
   { mode: 'create', icon: <Plus size={15} />, label: '作成', title: '新規ルート作成' },
   { mode: 'split', icon: <Scissors size={15} />, label: '分割', title: 'トラック分割' },
   { mode: 'deleteRange', icon: <Trash2 size={15} />, label: '区間削除', title: '区間削除' },
+  { mode: 'reroute', icon: <Route size={15} />, label: '道なり補正', title: '既存ルートの区間を、道路に沿って引き直す' },
   { mode: 'merge', icon: <Merge size={15} />, label: '結合', title: 'トラック結合' },
   { mode: 'partialEdit', icon: <GitBranch size={15} />, label: '部分編集', title: '部分編集' },
   { mode: 'thinOut', icon: <GitBranch size={15} />, label: '間引き', title: 'ポイント間引き' },
@@ -57,7 +57,7 @@ export default function EditToolbar() {
     // 同一モードのボタンはトグルで解除（'none'）になる。切替先が作成モード以外になる場合、
     // 未確定ポイントを暗黙に破棄しない（確認してキャンセル可能にする）
     const target = m === mode ? 'none' : m
-    if (target !== 'create' && !confirmDiscardCreatePoints()) return
+    if (target !== useEditorStore.getState().mode && !confirmDiscardCreatePoints()) return
     setMode(target)
     setExpanded(false)
   }

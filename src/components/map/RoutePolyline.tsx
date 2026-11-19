@@ -87,7 +87,7 @@ export default function RoutePolyline({ route, map, color }: Props) {
         selectTrack(trackIndex)
         if (nearest) {
           selectPoint(nearest.index)
-          if (currentMode === 'deleteRange') {
+          if (currentMode === 'deleteRange' || (currentMode === 'reroute' && useEditorStore.getState().draftTarget.kind !== 'replace')) {
             toggleDeleteRangeMarker(route.id, trackIndex, nearest.index)
           } else if (currentMode === 'merge') {
             toggleMergeTarget(route.id)
@@ -200,7 +200,7 @@ export default function RoutePolyline({ route, map, color }: Props) {
     rangeMarkers.current.forEach((m) => map.removeLayer(m))
     rangeMarkers.current = []
 
-    if (mode !== 'deleteRange' || !selection || selection.routeId !== route.id) return
+    if ((mode !== 'deleteRange' && mode !== 'reroute') || !selection || selection.routeId !== route.id) return
     const track = route.tracks[selection.trackIndex]
     if (!track) return
 

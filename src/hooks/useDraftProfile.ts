@@ -59,7 +59,7 @@ export function useDraftProfileSync() {
 
   useEffect(() => {
     const store = useEditorStore.getState()
-    if (mode !== 'create') { if (store.draftProfile) store.setDraftProfile(null); return }
+    if (mode !== 'create' && mode !== 'reroute') { if (store.draftProfile) store.setDraftProfile(null); return }
     // まずキャッシュにあるもので組み立てる（線の形と道のりはすぐ出す）
     store.setDraftProfile(assemble(draft, simplify, autoEle))
     if (!autoEle) return
@@ -75,7 +75,7 @@ export function useDraftProfileSync() {
         remember(legKey(leg.id, leg.gen, simplify, leg.status), eles)
       }
       const cur = useEditorStore.getState()
-      if (cur.mode === 'create') cur.setDraftProfile(assemble(cur.draft, cur.createSimplify, cur.createAutoElevation))
+      if (cur.mode === 'create' || cur.mode === 'reroute') cur.setDraftProfile(assemble(cur.draft, cur.createSimplify, cur.createAutoElevation))
     }, DEBOUNCE_MS)
     return () => { clearTimeout(timer); ac.abort() }
   }, [mode, draft, autoEle, simplify])

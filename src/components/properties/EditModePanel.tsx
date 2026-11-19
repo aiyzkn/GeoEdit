@@ -16,7 +16,8 @@ import { draftPointsSimplified, draftDistance, DRAFT_SIMPLIFY_M } from '@/lib/ed
 import { computeGainLoss } from '@/lib/routeStats'
 import { useDraftProfileSync } from '@/hooks/useDraftProfile'
 import SpeedSelect from '@/components/properties/SpeedSelect'
-import { removeLastAnchor, rerouteAll } from '@/lib/draftController'
+import { removeLastAnchor, rerouteAll, startAppend, startNew, startReplace } from '@/lib/draftController'
+import { applyDraft, countWaypointsInRange } from '@/lib/editors/draftApply'
 import { Settings2 } from 'lucide-react'
 import type { RouteData, TrackPoint } from '@/types/route'
 
@@ -27,7 +28,7 @@ function toLocalDatetimeInputValue(d: Date): string {
 }
 
 export default function EditModePanel() {
-  const { mode, setMode, selection, setSelection, pushUndo, draft, clearDraft, routingSettings, setRoutingSettings, routingProgress, setBusy, mergeTargetIds, partialEdit, clearPartialEdit, mapMatchEnabled, setMapMatchEnabled, speedProfile, setSpeedProfile, createAutoElevation: autoElevation, setCreateAutoElevation: setAutoElevation, createSimplify, setCreateSimplify, draftProfile } = useEditorStore()
+  const { mode, setMode, selection, setSelection, pushUndo, draft, clearDraft, routingSettings, setRoutingSettings, routingProgress, setBusy, mergeTargetIds, partialEdit, clearPartialEdit, mapMatchEnabled, setMapMatchEnabled, speedProfile, setSpeedProfile, createAutoElevation: autoElevation, setCreateAutoElevation: setAutoElevation, createSimplify, setCreateSimplify, draftProfile, draftTarget } = useEditorStore()
   useDraftProfileSync()
   const { routes, selectedRouteId, selectedTrackIndex, selectedPointIndex, updateRoute, addRoute, removeRoute } = useRouteStore()
   const { addToast } = useUiStore()
@@ -84,7 +85,7 @@ export default function EditModePanel() {
 
   // 作成中の 1 行の要約（B5）: 登り・下り・見込みの所要時間と到着時刻
   const draftSummary = (() => {
-    if (mode !== 'create' || !draftProfile || draftProfile.points.length < 2) return ''
+    if ((mode !== 'create' && mode !== 'reroute') || !draftProfile || draftProfile.points.length < 2) return ''
     const parts: string[] = []
     const hasEle = autoElevation && draftProfile.points.some((p) => p.ele != null)
     if (hasEle) {
@@ -104,7 +105,7 @@ export default function EditModePanel() {
   })()
 
   if (mode === 'none') return null
-  if (mode !== 'create' && !route) return null
+  if (mode !== 'create' && mode !== 'reroute' && !route) return null
 
   const snapshot = () => routes
 
@@ -312,6 +313,7 @@ export default function EditModePanel() {
   }
 
   const handleCreateConfirm = async () => {
+    const target = useEditorStore.getState().draftTarget
     if (draft.anchors.length < 2) {
       addToast('info', '地図をクリックして2点以上追加してください')
       return
@@ -320,26 +322,36 @@ export default function EditModePanel() {
       addToast('info', '経路の探索が終わってから確定してください')
       return
     }
-    const name = createRouteName.trim() || `新規ルート ${routes.length + 1}`
-    if (isRouteNameTaken(routes, name)) {
-      addToast('error', `同名のルートが既に存在します: ${name}`)
-      return
-    }
-    let startTime: Date | undefined
-    let endTime: Date | undefined
-    if (createStartStr) {
-      startTime = new Date(createStartStr)
-      if (isNaN(startTime.getTime())) { addToast('error', '開始日時の形式が正しくありません'); return }
-    }
-    if (createEndStr) {
-      if (!startTime) { addToast('error', '終了日時を指定する場合は開始日時も指定してください'); return }
-      endTime = new Date(createEndStr)
-      if (isNaN(endTime.getTime())) { addToast('error', '終了日時の形式が正しくありません'); return }
-      if (startTime.toDateString() !== endTime.toDateString()) {
-        addToast('error', '開始・終了は同じ日付にしてください（日付をまたぐ設定は不可）')
+    let newRoute: { id: string; name: string; trackName?: string; startTime?: Date; endTime?: Date } | undefined
+    if (target.kind === 'new') {
+      const name = createRouteName.trim() || `新規ルート ${routes.length + 1}`
+      if (isRouteNameTaken(routes, name)) {
+        addToast('error', `同名のルートが既に存在します: ${name}`)
         return
       }
-      if (endTime.getTime() <= startTime.getTime()) { addToast('error', '終了日時は開始日時より後にしてください'); return }
+      let startTime: Date | undefined
+      let endTime: Date | undefined
+      if (createStartStr) {
+        startTime = new Date(createStartStr)
+        if (isNaN(startTime.getTime())) { addToast('error', '開始日時の形式が正しくありません'); return }
+      }
+      if (createEndStr) {
+        if (!startTime) { addToast('error', '終了日時を指定する場合は開始日時も指定してください'); return }
+        endTime = new Date(createEndStr)
+        if (isNaN(endTime.getTime())) { addToast('error', '終了日時の形式が正しくありません'); return }
+        if (startTime.toDateString() !== endTime.toDateString()) {
+          addToast('error', '開始・終了は同じ日付にしてください（日付をまたぐ設定は不可）')
+          return
+        }
+        if (endTime.getTime() <= startTime.getTime()) { addToast('error', '終了日時は開始日時より後にしてください'); return }
+      }
+      newRoute = { id: crypto.randomUUID(), name, trackName: createTrackName.trim() || undefined, startTime, endTime }
+    }
+    if (target.kind === 'replace') {
+      // 区間の中のウェイポイントは消える（B1）
+      const tp = routes.find((r) => r.id === target.routeId)?.tracks[target.trackIndex]?.points ?? []
+      const n = countWaypointsInRange(tp, target.startIndex, target.endIndex)
+      if (n > 0 && !window.confirm(`引き直す区間の中にあるウェイポイント ${n} 個が消えます。続けますか？`)) return
     }
 
     const pts = draftPointsSimplified(draft, createSimplify)
@@ -356,40 +368,79 @@ export default function EditModePanel() {
         elevs = await fetchElevations(pts)
       }
     }
-    let points: TrackPoint[] = pts.map((p, i) => ({
-      lat: p.lat,
-      lng: p.lng,
-      ele: elevs[i] ?? undefined,
-    }))
-    if (startTime) {
-      points = endTime ? redistributeTimeWithRange(points, startTime, endTime, speedProfile) : redistributeTime(points, startTime, speedProfile)
-    }
-    const newRoute: RouteData = {
-      id: crypto.randomUUID(),
-      name,
-      sourceFormat: 'gpx',
-      sourceFileName: `${name}.gpx`,
-      kind: 'track',
-      tracks: [{ name: createTrackName.trim() || undefined, points }],
-      standaloneWaypoints: [],
-    }
-    pushUndo('ルート作成', routes)
-    addRoute(newRoute)
-    clearDraft()
+    const points: TrackPoint[] = pts.map((p, i) => (elevs[i] != null ? { lat: p.lat, lng: p.lng, ele: elevs[i]! } : { lat: p.lat, lng: p.lng }))
+    const result = applyDraft(routes, { target, points, newRoute, speed: speedProfile })
     setBusy(false)
     setCreating(false)
-    addToast('success', `ルートを作成しました（${points.length} ポイント）`)
+    if (!result.ok) {
+      addToast('error', result.error === 'target-missing' ? '対象のルートが見つかりません' : '点が足りません')
+      return
+    }
+    pushUndo(result.undoLabel, routes)
+    if (target.kind === 'new') {
+      addRoute(result.routes[result.routes.length - 1])
+      addToast('success', `ルートを作成しました（${result.addedPoints} ポイント）`)
+    } else {
+      useRouteStore.getState().setRoutes(result.routes)
+      addToast('success', target.kind === 'append' ? `ルートに追記しました（${result.addedPoints} ポイント）` : `道なりに引き直しました（${result.addedPoints} ポイント）`)
+    }
+    clearDraft()
     setMode('none')
   }
 
   return (
     <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs space-y-2">
-      {mode === 'create' && (
+      {mode === 'reroute' && draftTarget.kind !== 'replace' && (
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[var(--color-muted)]">新規ルート作成:</span>
-          <span>地図をクリックしてポイントを追加（{draft.anchors.length} 点）</span>
+          <span className="text-[var(--color-muted)]">道なり補正:</span>
+          <span>選択中のトラックで、引き直す区間の始点と終点をクリック（地図またはタイムライン）</span>
+          {route && selection && selection.routeId === route.id && (
+            <span>#{Math.min(selection.startIndex, selection.endIndex)} 〜 #{Math.max(selection.startIndex, selection.endIndex)}</span>
+          )}
+          <button
+            onClick={() => {
+              if (!selection) return
+              if (!startReplace(selection.routeId, selection.trackIndex, selection.startIndex, selection.endIndex)) {
+                addToast('info', '始点と終点に、違う点を選んでください')
+              }
+            }}
+            disabled={!selection || selection.startIndex === selection.endIndex}
+            className="px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-500 disabled:opacity-40"
+          >
+            引き直す
+          </button>
+        </div>
+      )}
+      {(mode === 'create' || (mode === 'reroute' && draftTarget.kind === 'replace')) && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[var(--color-muted)]">{draftTarget.kind === 'replace' ? '道なり補正:' : draftTarget.kind === 'append' ? 'ルートに追記:' : '新規ルート作成:'}</span>
+          {mode === 'create' && (
+            <select
+              aria-label="作成先"
+              value={draftTarget.kind === 'append' ? `append-${draftTarget.end}` : 'new'}
+              disabled={draft.anchors.some((a) => !a.locked)}
+              onChange={(e) => {
+                const v = e.target.value
+                if (v === 'new') startNew()
+                else if (route) startAppend(route.id, selectedTrackIndex, v === 'append-head' ? 'head' : 'tail')
+              }}
+              title="通過点を置いたあとは変えられません（変えるには、いったん全部消す）"
+              className="px-1 py-1 border border-[var(--color-border)] rounded bg-[var(--color-bg)] text-[var(--color-fg)] max-w-56"
+            >
+              <option value="new">新規ルート</option>
+              {route && track && track.points.length > 0 && (
+                <>
+                  <option value="append-tail">「{route.name}」の末尾に追記</option>
+                  <option value="append-head">「{route.name}」の先頭に追記</option>
+                </>
+              )}
+            </select>
+          )}
+          <span>{draftTarget.kind === 'replace' ? `通過点 ${draft.anchors.length} 点（線の上をドラッグして足す）` : <>地図をクリックしてポイントを追加（{draft.anchors.length} 点）</>}</span>
           {draft.legs.length > 0 && <span className="text-[var(--color-muted)]">{(draftDistance(draft) / 1000).toFixed(2)} km</span>}
           {draftSummary && <span className="text-[var(--color-muted)]" data-testid="draft-summary">{draftSummary}</span>}
+          {draftTarget.kind === 'new' && (
+            <>
           <input
             type="text"
             placeholder="ルート名"
@@ -418,6 +469,8 @@ export default function EditModePanel() {
             title="終了日時（任意・同一日付内のみ）"
             className="px-1 py-1 border border-[var(--color-border)] rounded bg-[var(--color-bg)] text-[var(--color-fg)]"
           />
+            </>
+          )}
           <label className="flex items-center gap-1">
             <input type="checkbox" checked={autoElevation} onChange={(e) => setAutoElevation(e.target.checked)} />
             標高を自動取得
@@ -475,9 +528,15 @@ export default function EditModePanel() {
           {routingProgress && routingProgress.total >= 8 && (
             <span className="text-[var(--color-muted)]">道路データを取得中 {routingProgress.done}/{routingProgress.total}</span>
           )}
+          {draftTarget.kind === 'replace' && (
+            <button onClick={() => { clearDraft() }} className="px-2 py-1 bg-[var(--color-border)] rounded hover:opacity-80">
+              キャンセル
+            </button>
+          )}
           <button
             onClick={removeLastAnchor}
-            disabled={draft.anchors.length === 0}
+            hidden={draftTarget.kind === 'replace'}
+            disabled={!draft.anchors.some((a) => !a.locked)}
             className="px-2 py-1 bg-[var(--color-border)] rounded hover:opacity-80 disabled:opacity-40"
           >
             1点削除

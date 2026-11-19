@@ -184,7 +184,7 @@ export default function VirtualTimeline() {
     setMultiSelected(new Set())
     lastClickIndexRef.current = index
     selectPoint(index)
-    if (mode === 'deleteRange' && route) {
+    if ((mode === 'deleteRange' || (mode === 'reroute' && useEditorStore.getState().draftTarget.kind !== 'replace')) && route) {
       toggleDeleteRangeMarker(route.id, selectedTrackIndex, index)
     }
   }, [mode, route, selectedTrackIndex, selectPoint, toggleDeleteRangeMarker])
@@ -289,7 +289,7 @@ export default function VirtualTimeline() {
             const prev = item.index > 0 ? points[item.index - 1] : undefined
             const isSelected = selectedPointIndex === item.index
             const isMultiSelected = multiSelected.has(item.index)
-            const isRangeMarker = mode === 'deleteRange' && !!selection && selection.routeId === route?.id &&
+            const isRangeMarker = (mode === 'deleteRange' || mode === 'reroute') && !!selection && selection.routeId === route?.id &&
               (item.index === selection.startIndex || item.index === selection.endIndex)
 
             return (

@@ -229,7 +229,7 @@ export default function MapPane() {
           color={routeColor(route.color, idx)}
         />
       ))}
-      {mapInstanceRef.current && mode === 'create' && (
+      {mapInstanceRef.current && (mode === 'create' || mode === 'reroute') && (
         <CreateRouteLayer map={mapInstanceRef.current} />
       )}
       {mapInstanceRef.current && mode === 'partialEdit' && (
