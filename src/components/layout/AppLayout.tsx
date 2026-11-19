@@ -1,5 +1,5 @@
-import { useRef, useState, useCallback } from 'react'
 import AppHeader from './AppHeader'
+import ResizeHandle from './ResizeHandle'
 import MapPane from '@/components/map/MapPane'
 import RightSidebar from '@/components/sidebar/RightSidebar'
 import BottomPane from '@/components/timeline/BottomPane'
@@ -13,9 +13,12 @@ import EditToolbar from '@/components/toolbar/EditToolbar'
 import EditModePanel from '@/components/properties/EditModePanel'
 import { useUiStore } from '@/stores/uiStore'
 import { useBreakpoint } from '@/hooks/useBreakpoint'
+import { X } from 'lucide-react'
 
 const MIN_BOTTOM = 80
 const MAX_BOTTOM = 600
+const MIN_SIDEBAR = 160
+const MAX_SIDEBAR = 480
 
 export default function AppLayout() {
   const { bottomPaneHeight, setBottomPaneHeight, sidebarWidth, setSidebarWidth, sidebarOpen, setSidebarOpen } = useUiStore()
@@ -23,59 +26,6 @@ export default function AppLayout() {
   const showExport = useUiStore((s) => s.showExport)
   const setShowExport = useUiStore((s) => s.setShowExport)
   const exportRoute = useRouteStore((s) => s.routes.find((r) => r.id === s.selectedRouteId))
-  const dragging = useRef(false)
-  const startY = useRef(0)
-  const startH = useRef(0)
-  const [isDragging, setIsDragging] = useState(false)
-  const sidebarDragging = useRef(false)
-  const startX = useRef(0)
-  const startW = useRef(0)
-  const [isSidebarDragging, setIsSidebarDragging] = useState(false)
-
-  const onResizeStart = useCallback((e: React.MouseEvent) => {
-    dragging.current = true
-    startY.current = e.clientY
-    startH.current = bottomPaneHeight
-    setIsDragging(true)
-
-    const onMove = (ev: MouseEvent) => {
-      if (!dragging.current) return
-      const delta = startY.current - ev.clientY
-      const newH = Math.max(MIN_BOTTOM, Math.min(MAX_BOTTOM, startH.current + delta))
-      setBottomPaneHeight(newH)
-    }
-    const onUp = () => {
-      dragging.current = false
-      setIsDragging(false)
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }, [bottomPaneHeight, setBottomPaneHeight])
-
-  // 右サイドバーの幅リサイズ（uiStore.sidebarWidth/setSidebarWidthは以前から存在したが
-  // ドラッグハンドルが未実装で常に初期値のまま固定されていたため新設）
-  const onSidebarResizeStart = useCallback((e: React.MouseEvent) => {
-    sidebarDragging.current = true
-    startX.current = e.clientX
-    startW.current = sidebarWidth
-    setIsSidebarDragging(true)
-
-    const onMove = (ev: MouseEvent) => {
-      if (!sidebarDragging.current) return
-      const delta = startX.current - ev.clientX
-      setSidebarWidth(startW.current + delta)
-    }
-    const onUp = () => {
-      sidebarDragging.current = false
-      setIsSidebarDragging(false)
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }, [sidebarWidth, setSidebarWidth])
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-[var(--color-bg)]">
@@ -89,14 +39,11 @@ export default function AppLayout() {
           <MapPane />
           <RestoreBanner />
         </div>
-        {/* PC（>=1024px）: 常時表示。タブレット（768〜1024px）: AppHeaderのトグルで手動展開、オーバーレイ表示。
-            モバイル（<768px）: 基本設計書16.1により非表示（アクセス手段自体を提供しない） */}
+        {/* PC（>=1024px）: 常時表示。タブレット（768〜1024px）: ヘッダーのボタンで、右から重ねて出す。
+            モバイル（<768px）: ヘッダーのボタンで、画面の下からシートを出す（D5） */}
         {breakpoint === 'desktop' && (
           <>
-            <div
-              className={`w-1 cursor-col-resize bg-[var(--color-border)] hover:bg-blue-400 transition-colors ${isSidebarDragging ? 'bg-blue-400' : ''}`}
-              onMouseDown={onSidebarResizeStart}
-            />
+            <ResizeHandle orientation="vertical" value={sidebarWidth} min={MIN_SIDEBAR} max={MAX_SIDEBAR} onChange={setSidebarWidth} label="右側のパネルの幅" />
             <RightSidebar width={sidebarWidth} />
           </>
         )}
@@ -112,10 +59,32 @@ export default function AppLayout() {
           </>
         )}
       </div>
-      <div
-        className={`h-1 cursor-row-resize bg-[var(--color-border)] hover:bg-blue-400 transition-colors ${isDragging ? 'bg-blue-400' : ''}`}
-        onMouseDown={onResizeStart}
-      />
+      {breakpoint === 'mobile' && sidebarOpen && (
+        <>
+          <div className="fixed inset-0 bg-black/30 z-30" onClick={() => setSidebarOpen(false)} />
+          <div
+            role="region"
+            aria-label="ルート・レイヤー・属性・統計"
+            className="fixed left-0 right-0 bottom-0 z-40 h-[70vh] flex flex-col rounded-t-xl shadow-2xl bg-[var(--color-surface)] border-t border-[var(--color-border)] overflow-hidden"
+          >
+            <div className="relative flex items-center justify-center h-6 shrink-0">
+              <div className="w-10 h-1 rounded-full bg-[var(--color-border)]" aria-hidden="true" />
+              <button
+                onClick={() => setSidebarOpen(false)}
+                aria-label="閉じる"
+                title="閉じる"
+                className="absolute right-2 top-0.5 p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden flex">
+              <RightSidebar width="100%" />
+            </div>
+          </div>
+        </>
+      )}
+      <ResizeHandle orientation="horizontal" value={bottomPaneHeight} min={MIN_BOTTOM} max={MAX_BOTTOM} onChange={setBottomPaneHeight} label="下側のタイムラインの高さ" />
       <BottomPane height={bottomPaneHeight} />
       <ToastContainer />
       <HelpDialog />

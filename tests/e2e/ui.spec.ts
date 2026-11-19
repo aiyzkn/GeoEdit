@@ -98,3 +98,46 @@ test('Escape で編集モードを解除できる', async ({ page }) => {
   await page.keyboard.press('Escape')
   await expect(page.getByRole('button', { name: '逆ルートにする' })).toBeHidden()
 })
+
+test('Enter で、いまのモードの実行ボタンと同じ処理をする（逆ルート）', async ({ page }) => {
+  await openFilesViaButton(page, 'sample.gpx')
+  await expect(page.getByText('5 pts · 1 trk')).toBeVisible()
+  await selectMode(page, '逆ルート')
+  await page.locator('.leaflet-container').click({ position: { x: 20, y: 300 } }) // フォーカスをボタンから外す
+  await page.keyboard.press('Enter')
+  await expect(page.getByText('逆ルートにしました')).toBeVisible()
+})
+
+test('Enter: モーダルが開いている間は、全体の確定は動かない。Escape でモーダルが閉じる', async ({ page }) => {
+  await openFilesViaButton(page, 'sample.gpx')
+  await expect(page.getByText('5 pts · 1 trk')).toBeVisible()
+  await selectMode(page, '逆ルート')
+  await page.getByRole('button', { name: '出力', exact: true }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await page.getByRole('dialog').getByRole('heading').click() // フォーカスをボタンから外す
+  await page.keyboard.press('Enter')
+  await expect(page.getByText('逆ルートにしました')).toBeHidden()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toBeHidden()
+  // モーダルを閉じても、モードは残る（Escape はモーダルだけを閉じる）
+  await expect(page.getByRole('button', { name: '逆ルートにする' })).toBeVisible()
+})
+
+test('リサイズハンドルは矢印キーでも動く', async ({ page }) => {
+  const sep = page.getByRole('separator', { name: '下側のタイムラインの高さ' })
+  const before = Number(await sep.getAttribute('aria-valuenow'))
+  await sep.focus()
+  await page.keyboard.press('ArrowUp')
+  await expect(sep).toHaveAttribute('aria-valuenow', String(before + 16))
+})
+
+test('モバイル: ヘッダーのボタンで、ルートなどのパネルが下からのシートで開く', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 })
+  await openFilesViaButton(page, 'sample.gpx')
+  await page.getByRole('button', { name: 'サイドバーの表示/非表示' }).click()
+  const sheet = page.getByRole('region', { name: 'ルート・レイヤー・属性・統計' })
+  await expect(sheet).toBeVisible()
+  await expect(sheet.getByText('sample', { exact: false }).first()).toBeVisible()
+  await sheet.getByRole('button', { name: '閉じる' }).click()
+  await expect(sheet).toBeHidden()
+})

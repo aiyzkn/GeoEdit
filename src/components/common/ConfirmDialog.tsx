@@ -1,4 +1,3 @@
-import { useEffect } from 'react'
 import Modal from './Modal'
 import { useUiStore, resolveConfirm } from '@/stores/uiStore'
 
@@ -11,15 +10,6 @@ const KIND_CLASS = {
 /** uiStore.confirm() の確認ダイアログ（designs/機能追加・UI改善設計書.md C3）。AppLayout に 1 つ置く */
 export default function ConfirmDialog() {
   const req = useUiStore((s) => s.confirmRequest)
-
-  useEffect(() => {
-    if (!req) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); resolveConfirm(null) }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [req])
 
   if (!req) return null
   return (

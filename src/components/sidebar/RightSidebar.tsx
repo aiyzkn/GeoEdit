@@ -6,7 +6,8 @@ import StatsPanel from './StatsPanel'
 import { useEditorStore } from '@/stores/editorStore'
 
 interface Props {
-  width: number
+  /** px。モバイルの下からのシートでは '100%'（D5） */
+  width: number | '100%'
 }
 
 type Tab = 'routes' | 'layers' | 'properties' | 'stats'
@@ -23,7 +24,7 @@ export default function RightSidebar({ width }: Props) {
 
   return (
     <div
-      className="flex flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)] shrink-0 overflow-hidden"
+      className={`flex flex-col bg-[var(--color-surface)] shrink-0 overflow-hidden ${width === '100%' ? '' : 'border-l border-[var(--color-border)]'}`}
       style={{ width }}
     >
       <div className="flex border-b border-[var(--color-border)] shrink-0">

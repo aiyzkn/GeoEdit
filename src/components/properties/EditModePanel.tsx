@@ -103,6 +103,14 @@ export default function EditModePanel() {
     return parts.join(' ・ ')
   })()
 
+  // Enter で、いまのモードの主な確定（D4）。実際の処理は、早い return より後で決まるので ref で渡す
+  const modeConfirmRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    const onConfirm = () => modeConfirmRef.current()
+    document.addEventListener('mode-confirm', onConfirm)
+    return () => document.removeEventListener('mode-confirm', onConfirm)
+  }, [])
+
   // 「確定して移動」（C3）: ツールバー・Esc の確認ダイアログから来る。フックは早い return より前に置く
   const confirmRef = useRef<(then: EditMode) => Promise<boolean>>(async () => false)
   useEffect(() => {
@@ -409,6 +417,34 @@ export default function EditModePanel() {
 
   confirmRef.current = handleCreateConfirm
 
+  modeConfirmRef.current = () => {
+    // 処理の最中は何もしない（二重の確定を防ぐ）
+    if (useEditorStore.getState().isBusy || creating || replacing) return
+    switch (mode) {
+      case 'create':
+        void handleCreateConfirm()
+        break
+      case 'reroute':
+        if (draftTarget.kind === 'replace') void handleCreateConfirm()
+        else if (selection && selection.startIndex !== selection.endIndex) {
+          if (!startReplace(selection.routeId, selection.trackIndex, selection.startIndex, selection.endIndex)) addToast('info', '始点と終点に、違う点を選んでください')
+        }
+        break
+      case 'split': handleSplit(); break
+      case 'deleteRange':
+        if (selection && selection.startIndex !== selection.endIndex) handleDeleteRange('range')
+        break
+      case 'merge': handleMerge(); break
+      case 'partialEdit': if (partialEdit) handlePartialEditConfirm(); break
+      case 'thinOut': handleThinOut(); break
+      case 'timeEdit': if (timeEditSubMode === 'recalc') handleTimeEdit(); else handleTimeShift(); break
+      case 'reverse': handleReverse(); break
+      case 'elevReplace': void handleElevReplace(); break
+      case 'rename': handleRename(); break
+      default: break
+    }
+  }
+
   return (
     <div className="border-b border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs space-y-2">
       {mode === 'reroute' && draftTarget.kind !== 'replace' && (
@@ -465,6 +501,7 @@ export default function EditModePanel() {
           <input
             type="text"
             placeholder="ルート名"
+            aria-label="ルート名"
             value={createRouteName}
             onChange={(e) => setCreateRouteName(e.target.value)}
             className="px-2 py-1 border border-[var(--color-border)] rounded bg-[var(--color-bg)] text-[var(--color-fg)] w-32"
@@ -472,6 +509,7 @@ export default function EditModePanel() {
           <input
             type="text"
             placeholder="トラック名"
+            aria-label="トラック名"
             value={createTrackName}
             onChange={(e) => setCreateTrackName(e.target.value)}
             className="px-2 py-1 border border-[var(--color-border)] rounded bg-[var(--color-bg)] text-[var(--color-fg)] w-32"
@@ -481,6 +519,7 @@ export default function EditModePanel() {
             value={createStartStr}
             onChange={(e) => setCreateStartStr(e.target.value)}
             title="開始日時（任意）"
+            aria-label="開始日時（任意）"
             className="px-1 py-1 border border-[var(--color-border)] rounded bg-[var(--color-bg)] text-[var(--color-fg)]"
           />
           <input
@@ -488,6 +527,7 @@ export default function EditModePanel() {
             value={createEndStr}
             onChange={(e) => setCreateEndStr(e.target.value)}
             title="終了日時（任意・同一日付内のみ）"
+            aria-label="終了日時（任意・同一日付内のみ）"
             className="px-1 py-1 border border-[var(--color-border)] rounded bg-[var(--color-bg)] text-[var(--color-fg)]"
           />
             </>

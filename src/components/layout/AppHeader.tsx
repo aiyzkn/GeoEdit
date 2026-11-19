@@ -70,6 +70,7 @@ export default function AppHeader() {
         onClick={openFiles}
         className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs bg-blue-600 text-white hover:bg-blue-500 transition-colors whitespace-nowrap"
         title="ファイルを開く (Ctrl+O)"
+        aria-label="開く"
       >
         <Upload size={14} />
         <span className="hidden sm:inline">開く</span>
@@ -80,6 +81,7 @@ export default function AppHeader() {
         disabled={!selectedRouteId}
         className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs bg-[var(--color-border)] text-[var(--color-fg)] hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
         title="ファイルに出力"
+        aria-label="出力"
       >
         <Download size={14} />
         <span className="hidden sm:inline">出力</span>
@@ -92,6 +94,7 @@ export default function AppHeader() {
         disabled={undoStack.length === 0}
         className="shrink-0 p-1.5 rounded hover:bg-[var(--color-border)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         title={`元に戻す (Ctrl+Z)${undoStack[undoStack.length - 1] ? ` — ${undoStack[undoStack.length - 1].description}` : ''}`}
+        aria-label="元に戻す"
       >
         <Undo2 size={16} />
       </button>
@@ -100,6 +103,7 @@ export default function AppHeader() {
         disabled={redoStack.length === 0}
         className="shrink-0 p-1.5 rounded hover:bg-[var(--color-border)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         title="やり直し (Ctrl+Y)"
+        aria-label="やり直し"
       >
         <Redo2 size={16} />
       </button>
@@ -117,6 +121,7 @@ export default function AppHeader() {
                 : 'text-[var(--color-muted)] hover:text-[var(--color-fg)]'
             }`}
             title={label}
+            aria-pressed={theme === value}
           >
             {icon}
             <span className="hidden sm:inline">{label}</span>
@@ -128,6 +133,7 @@ export default function AppHeader() {
         onClick={() => setShowAbout(true)}
         className="shrink-0 p-1.5 rounded hover:bg-[var(--color-border)] text-[var(--color-muted)] transition-colors"
         title={`バージョン情報 v${APP_VERSION}`}
+        aria-label="バージョン情報"
       >
         <Info size={16} />
       </button>
@@ -135,6 +141,7 @@ export default function AppHeader() {
         onClick={() => setShowHelp(true)}
         className="shrink-0 p-1.5 rounded hover:bg-[var(--color-border)] text-[var(--color-muted)] transition-colors"
         title="ヘルプ"
+        aria-label="ヘルプ"
       >
         <HelpCircle size={16} />
       </button>
@@ -145,9 +152,11 @@ export default function AppHeader() {
         </span>
       )}
 
-      {breakpoint === 'tablet' && (
+      {(breakpoint === 'tablet' || breakpoint === 'mobile') && (
         <button
           onClick={toggleSidebar}
+          aria-label="サイドバーの表示/非表示"
+          aria-pressed={sidebarOpen}
           className={`shrink-0 p-1.5 rounded transition-colors ${
             sidebarOpen
               ? 'bg-blue-600 text-white'

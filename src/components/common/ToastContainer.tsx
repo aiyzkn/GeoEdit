@@ -19,11 +19,12 @@ function ToastItem({ toast }: { toast: Toast }) {
   }, [toast.id])
 
   return (
-    <div className="flex items-start gap-2 bg-gray-800 text-white rounded-lg shadow-xl px-3 py-2.5 text-xs max-w-xs border border-gray-700">
+    <div role={toast.type === 'error' ? 'alert' : undefined} className="flex items-start gap-2 bg-gray-800 text-white rounded-lg shadow-xl px-3 py-2.5 text-xs max-w-xs border border-gray-700">
       {ICONS[toast.type]}
       <span className="flex-1">{toast.message}</span>
       <button
         onClick={() => removeToast(toast.id)}
+        aria-label="通知を閉じる"
         className="text-gray-400 hover:text-white transition-colors ml-1 shrink-0"
       >
         <X size={12} />
@@ -34,10 +35,10 @@ function ToastItem({ toast }: { toast: Toast }) {
 
 export default function ToastContainer() {
   const { toasts } = useUiStore()
-  if (toasts.length === 0) return null
 
+  // 入れ物は常に置いておく（aria-live の領域は、あとから足すと読み上げられないことがある。D6）
   return (
-    <div className="fixed bottom-4 right-4 flex flex-col gap-2 z-[99999] pointer-events-none">
+    <div aria-live="polite" className="fixed bottom-4 right-4 flex flex-col gap-2 z-[99999] pointer-events-none">
       {toasts.map((toast) => (
         <div key={toast.id} className="pointer-events-auto">
           <ToastItem toast={toast} />

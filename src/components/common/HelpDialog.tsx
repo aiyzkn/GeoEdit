@@ -18,6 +18,7 @@ export default function HelpDialog() {
                 ['元に戻す', 'Ctrl+Z（Mac: Cmd+Z）'],
                 ['やり直し', 'Ctrl+Y / Ctrl+Shift+Z（Mac: Cmd+Shift+Z）'],
                 ['モードキャンセル', 'Escape'],
+                ['確定・実行', 'Enter（いまのモードの確定・実行ボタンと同じ。入力欄・ボタンにフォーカスがあるときは、その欄・ボタンの動き）'],
               ].map(([k, v]) => (
                 <tr key={k} className="py-1">
                   <td className="pr-4 py-1 text-[var(--color-muted)] whitespace-nowrap">{k}</td>

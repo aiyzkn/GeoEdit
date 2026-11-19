@@ -43,6 +43,7 @@ export default function PlaceSearch({ map }: Props) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="地名・住所を検索"
+          aria-label="地名・住所を検索"
           className="flex-1 px-2.5 py-1.5 text-xs bg-[var(--color-surface)] text-[var(--color-fg)] outline-none"
         />
         {query && (
@@ -51,6 +52,7 @@ export default function PlaceSearch({ map }: Props) {
             onClick={() => { setQuery(''); setResults([]) }}
             className="px-1.5 bg-[var(--color-surface)] text-[var(--color-muted)] hover:text-[var(--color-fg)]"
             title="クリア"
+            aria-label="クリア"
           >
             <X size={14} />
           </button>
@@ -60,6 +62,7 @@ export default function PlaceSearch({ map }: Props) {
           disabled={isSearching}
           className="px-2.5 bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
           title="検索"
+          aria-label="検索"
         >
           <Search size={14} />
         </button>
