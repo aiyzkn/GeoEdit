@@ -7,6 +7,8 @@ import ToastContainer from '@/components/common/ToastContainer'
 import HelpDialog from '@/components/common/HelpDialog'
 import ConfirmDialog from '@/components/common/ConfirmDialog'
 import RestoreBanner from '@/components/common/RestoreBanner'
+import ExportDialog from '@/components/common/ExportDialog'
+import { useRouteStore } from '@/stores/routeStore'
 import EditToolbar from '@/components/toolbar/EditToolbar'
 import EditModePanel from '@/components/properties/EditModePanel'
 import { useUiStore } from '@/stores/uiStore'
@@ -18,6 +20,9 @@ const MAX_BOTTOM = 600
 export default function AppLayout() {
   const { bottomPaneHeight, setBottomPaneHeight, sidebarWidth, setSidebarWidth, sidebarOpen, setSidebarOpen } = useUiStore()
   const breakpoint = useBreakpoint()
+  const showExport = useUiStore((s) => s.showExport)
+  const setShowExport = useUiStore((s) => s.setShowExport)
+  const exportRoute = useRouteStore((s) => s.routes.find((r) => r.id === s.selectedRouteId))
   const dragging = useRef(false)
   const startY = useRef(0)
   const startH = useRef(0)
@@ -115,6 +120,7 @@ export default function AppLayout() {
       <ToastContainer />
       <HelpDialog />
       <ConfirmDialog />
+      {showExport && exportRoute && <ExportDialog route={exportRoute} onClose={() => setShowExport(false)} />}
     </div>
   )
 }

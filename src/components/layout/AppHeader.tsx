@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Upload, Undo2, Redo2, Sun, Moon, Monitor, HelpCircle, Info, PanelRightOpen, PanelRightClose } from 'lucide-react'
+import { Upload, Undo2, Redo2, Sun, Moon, Monitor, HelpCircle, Info, PanelRightOpen, PanelRightClose, Download } from 'lucide-react'
 import { useEditorStore } from '@/stores/editorStore'
 import { useRouteStore } from '@/stores/routeStore'
 import { useUiStore, type ColorTheme } from '@/stores/uiStore'
@@ -23,8 +23,8 @@ const OPEN_AS_KINDS: { value: RouteKind; label: string }[] = [
 
 export default function AppHeader() {
   const { undoStack, redoStack, undo, redo } = useEditorStore()
-  const { setRoutes, routes } = useRouteStore()
-  const { theme, setTheme, setShowHelp, openAsKind, setOpenAsKind, sidebarOpen, toggleSidebar } = useUiStore()
+  const { setRoutes, routes, selectedRouteId } = useRouteStore()
+  const { theme, setTheme, setShowHelp, openAsKind, setOpenAsKind, sidebarOpen, toggleSidebar, setShowExport } = useUiStore()
   const { openFiles } = useFileLoader()
   const [showAbout, setShowAbout] = useState(false)
   const breakpoint = useBreakpoint()
@@ -73,6 +73,16 @@ export default function AppHeader() {
       >
         <Upload size={14} />
         <span className="hidden sm:inline">開く</span>
+      </button>
+
+      <button
+        onClick={() => setShowExport(true)}
+        disabled={!selectedRouteId}
+        className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs bg-[var(--color-border)] text-[var(--color-fg)] hover:opacity-80 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+        title="ファイルに出力"
+      >
+        <Download size={14} />
+        <span className="hidden sm:inline">出力</span>
       </button>
 
       <div className="w-px h-6 bg-[var(--color-border)] shrink-0" />

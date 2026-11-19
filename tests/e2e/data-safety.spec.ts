@@ -54,8 +54,8 @@ test('保存していない変更: 読み込んだ直後は印なし、編集す
   await expect(page.getByText('5 pts · 1 trk')).toBeVisible()
   const mark = page.getByLabel('保存していない変更があります')
   await expect(mark).toHaveCount(0)
-  await selectMode(page, '逆順')
-  await page.getByRole('button', { name: '逆順にする' }).click()
+  await selectMode(page, '逆ルート')
+  await page.getByRole('button', { name: '逆ルートにする' }).click()
   await expect(mark).toHaveCount(1)
 })
 
@@ -63,8 +63,8 @@ test('離脱時の警告: 保存していない変更があると、ページを
   await setup(page)
   await openFilesViaButton(page, 'sample.gpx')
   await expect(page.getByText('5 pts · 1 trk')).toBeVisible()
-  await selectMode(page, '逆順')
-  await page.getByRole('button', { name: '逆順にする' }).click()
+  await selectMode(page, '逆ルート')
+  await page.getByRole('button', { name: '逆ルートにする' }).click()
   // beforeunload の確認は、利用者がページを操作したあとでないと出ない（ブラウザの決まり）
   await page.locator('.leaflet-container').click({ position: { x: 50, y: 50 } })
   const dialogPromise = page.waitForEvent('dialog')

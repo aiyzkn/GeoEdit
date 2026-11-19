@@ -15,7 +15,7 @@ export default function RightSidebar({ width }: Props) {
   const [tab, setTab] = useState<Tab>('routes')
   const mode = useEditorStore((s) => s.mode)
 
-  // 「詳細」モードに入ったら、詳細情報が表示される属性タブへ自動的に切り替える
+  // 「ポイント情報」モードに入ったら、詳細情報が表示される属性タブへ自動的に切り替える
   // （ポイントをクリックしても右パネルが変わらず「何も表示されない」ように見える問題への対応）
   useEffect(() => {
     if (mode === 'pointInfo') setTab('properties')

@@ -105,13 +105,14 @@ test('ファイル名を編集してエクスポートできる', async ({ page 
   await expect(page.getByText('エクスポート完了: my-custom-name.gpx')).toBeVisible()
 })
 
-test('編集ツールバーの「出力」モードからもエクスポートできる', async ({ page }) => {
+test('ヘッダーの「出力」から、選択中のルートを直接エクスポートできる', async ({ page }) => {
+  // ルートを選んでいなければ押せない
+  await expect(page.getByRole('button', { name: '出力', exact: true })).toBeDisabled()
   await openFilesViaButton(page, 'sample.gpx')
   await expect(page.getByText('5 pts · 1 trk')).toBeVisible()
 
-  // ツールバーの「出力」→ パネルの「エクスポートダイアログを開く」
-  await selectMode(page, '出力')
-  await page.getByRole('button', { name: 'エクスポートダイアログを開く' }).click()
+  // ヘッダーの「出力」→ すぐにエクスポートダイアログ（モードを経由しない）
+  await page.getByRole('button', { name: '出力', exact: true }).click()
 
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByRole('heading', { name: 'エクスポート' })).toBeVisible()

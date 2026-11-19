@@ -91,10 +91,10 @@ test('Escape で編集モードを解除できる', async ({ page }) => {
   await expect(page.getByText('5 pts · 1 trk')).toBeVisible()
 
   // 逆順モードに入るとパネルにボタンが出る
-  await selectMode(page, '逆順')
-  await expect(page.getByRole('button', { name: '逆順にする' })).toBeVisible()
+  await selectMode(page, '逆ルート')
+  await expect(page.getByRole('button', { name: '逆ルートにする' })).toBeVisible()
 
   // Escape でモード解除 → パネルが消える
   await page.keyboard.press('Escape')
-  await expect(page.getByRole('button', { name: '逆順にする' })).toBeHidden()
+  await expect(page.getByRole('button', { name: '逆ルートにする' })).toBeHidden()
 })
