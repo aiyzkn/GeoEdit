@@ -1,13 +1,15 @@
 import { useMapStore } from '@/stores/mapStore'
 import ElevationChart from '@/components/elevation/ElevationChart'
 import VirtualTimeline from './VirtualTimeline'
-import { ChevronDown, ChevronUp, BarChart2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, BarChart2, PanelBottomClose } from 'lucide-react'
 
 interface Props {
   height: number
+  /** タイムラインを折りたたむ */
+  onCollapse?: () => void
 }
 
-export default function BottomPane({ height }: Props) {
+export default function BottomPane({ height, onCollapse }: Props) {
   const { showElevation, toggleElevation } = useMapStore()
 
   const elevH = showElevation ? Math.min(120, Math.floor(height * 0.4)) : 0
@@ -34,6 +36,16 @@ export default function BottomPane({ height }: Props) {
           標高
           {showElevation ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
         </button>
+        {onCollapse && (
+          <button
+            onClick={onCollapse}
+            aria-label="タイムラインを折りたたむ"
+            title="タイムラインを折りたたむ（ヘッダーのボタンで開く）"
+            className="p-0.5 rounded text-[var(--color-muted)] hover:text-[var(--color-fg)] transition-colors"
+          >
+            <PanelBottomClose size={13} />
+          </button>
+        )}
       </div>
       {showElevation && elevH > 0 && (
         <div style={{ height: elevH }} className="shrink-0">

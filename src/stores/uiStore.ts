@@ -31,6 +31,10 @@ interface UiState {
   confirmRequest: ConfirmRequest | null
   /** 選択中のルートの出力ダイアログ（ヘッダーの「出力」。D3） */
   showExport: boolean
+  /** PC 幅で、右側のパネルを折りたたんでいるか（地図を広げる）。ブラウザに残す */
+  sidebarCollapsed: boolean
+  /** 下側のタイムライン（標高グラフを含む）を折りたたんでいるか。ブラウザに残す */
+  bottomCollapsed: boolean
 }
 
 interface UiActions {
@@ -46,6 +50,8 @@ interface UiActions {
   /** 確認ダイアログを出し、押されたボタンの id を返す。Esc・外側のクリックは null */
   confirm: (req: ConfirmRequest) => Promise<string | null>
   setShowExport: (show: boolean) => void
+  setSidebarCollapsed: (collapsed: boolean) => void
+  setBottomCollapsed: (collapsed: boolean) => void
 }
 
 const THEME_KEY = 'gpx-editor-theme'
@@ -65,6 +71,29 @@ function applyTheme(theme: ColorTheme) {
   const isDark = theme === 'dark' || (theme === 'system' && prefersDark)
   root.classList.toggle('dark', isDark)
   localStorage.setItem(THEME_KEY, theme)
+}
+
+const PANELS_KEY = 'geoedit-panels'
+
+interface PanelsSaved { sidebarCollapsed: boolean; bottomCollapsed: boolean }
+
+function loadPanels(): PanelsSaved {
+  const none = { sidebarCollapsed: false, bottomCollapsed: false }
+  try {
+    if (typeof localStorage === 'undefined') return none
+    const v = JSON.parse(localStorage.getItem(PANELS_KEY) ?? 'null')
+    return { sidebarCollapsed: v?.sidebarCollapsed === true, bottomCollapsed: v?.bottomCollapsed === true }
+  } catch {
+    return none
+  }
+}
+
+function savePanels(p: PanelsSaved) {
+  try {
+    localStorage.setItem(PANELS_KEY, JSON.stringify(p))
+  } catch {
+    // 保存できなくても動きは変わらない（次に開いたときに戻るだけ）
+  }
 }
 
 let toastCounter = 0
@@ -88,6 +117,7 @@ export const useUiStore = create<UiState & UiActions>()(
     toasts: [],
     confirmRequest: null,
     showExport: false,
+    ...loadPanels(),
     showHelp: false,
     openAsKind: 'track',
     sidebarOpen: false,
@@ -139,6 +169,22 @@ export const useUiStore = create<UiState & UiActions>()(
       set((state) => {
         state.sidebarOpen = open
       }),
+
+    setSidebarCollapsed: (collapsed) => {
+      set((state) => {
+        state.sidebarCollapsed = collapsed
+      })
+      const s = useUiStore.getState()
+      savePanels({ sidebarCollapsed: s.sidebarCollapsed, bottomCollapsed: s.bottomCollapsed })
+    },
+
+    setBottomCollapsed: (collapsed) => {
+      set((state) => {
+        state.bottomCollapsed = collapsed
+      })
+      const s = useUiStore.getState()
+      savePanels({ sidebarCollapsed: s.sidebarCollapsed, bottomCollapsed: s.bottomCollapsed })
+    },
 
     setShowExport: (show) =>
       set((state) => {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Upload, Undo2, Redo2, Sun, Moon, Monitor, HelpCircle, Info, PanelRightOpen, PanelRightClose, Download } from 'lucide-react'
+import { Upload, Undo2, Redo2, Sun, Moon, Monitor, HelpCircle, Info, PanelRightOpen, PanelRightClose, PanelBottomOpen, PanelBottomClose, Download } from 'lucide-react'
 import { useEditorStore } from '@/stores/editorStore'
 import { useShallow } from 'zustand/react/shallow'
 import { useRouteStore } from '@/stores/routeStore'
@@ -26,9 +26,14 @@ export default function AppHeader() {
   const { undoStack, redoStack, undo, redo } = useEditorStore()
   const { setRoutes, routes, selectedRouteId } = useRouteStore(useShallow((s) => ({ setRoutes: s.setRoutes, routes: s.routes, selectedRouteId: s.selectedRouteId })))
   const { theme, setTheme, setShowHelp, openAsKind, setOpenAsKind, sidebarOpen, toggleSidebar, setShowExport } = useUiStore()
+  const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed)
+  const setSidebarCollapsed = useUiStore((s) => s.setSidebarCollapsed)
+  const bottomCollapsed = useUiStore((s) => s.bottomCollapsed)
+  const setBottomCollapsed = useUiStore((s) => s.setBottomCollapsed)
   const { openFiles } = useFileLoader()
   const [showAbout, setShowAbout] = useState(false)
   const breakpoint = useBreakpoint()
+  const sidebarShown = breakpoint === 'desktop' ? !sidebarCollapsed : sidebarOpen
 
   useEffect(() => {
     const handler = () => openFiles()
@@ -153,21 +158,31 @@ export default function AppHeader() {
         </span>
       )}
 
-      {(breakpoint === 'tablet' || breakpoint === 'mobile') && (
-        <button
-          onClick={toggleSidebar}
-          aria-label="サイドバーの表示/非表示"
-          aria-pressed={sidebarOpen}
-          className={`shrink-0 p-1.5 rounded transition-colors ${
-            sidebarOpen
-              ? 'bg-blue-600 text-white'
-              : 'hover:bg-[var(--color-border)] text-[var(--color-muted)]'
-          }`}
-          title="サイドバーの表示/非表示"
-        >
-          {sidebarOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-        </button>
-      )}
+      {/* 下側のタイムライン（標高グラフを含む）の開け閉め。閉じると、その分だけ地図が広がる */}
+      <button
+        onClick={() => setBottomCollapsed(!bottomCollapsed)}
+        aria-label={bottomCollapsed ? 'タイムラインを開く' : 'タイムラインを折りたたむ'}
+        aria-expanded={!bottomCollapsed}
+        className="shrink-0 p-1.5 rounded transition-colors hover:bg-[var(--color-border)] text-[var(--color-muted)]"
+        title={bottomCollapsed ? 'タイムラインを開く' : 'タイムラインを折りたたむ'}
+      >
+        {bottomCollapsed ? <PanelBottomOpen size={16} /> : <PanelBottomClose size={16} />}
+      </button>
+
+      {/* 右側のパネルの開け閉め。PC は折りたたむと地図が広がる。タブレット・モバイルは重ねて開く */}
+      <button
+        onClick={breakpoint === 'desktop' ? () => setSidebarCollapsed(!sidebarCollapsed) : toggleSidebar}
+        aria-label={sidebarShown ? '右側のパネルを折りたたむ' : '右側のパネルを開く'}
+        aria-expanded={sidebarShown}
+        className={`shrink-0 p-1.5 rounded transition-colors ${
+          breakpoint !== 'desktop' && sidebarOpen
+            ? 'bg-blue-600 text-white'
+            : 'hover:bg-[var(--color-border)] text-[var(--color-muted)]'
+        }`}
+        title={sidebarShown ? '右側のパネルを折りたたむ' : '右側のパネルを開く'}
+      >
+        {sidebarShown ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+      </button>
 
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
     </header>

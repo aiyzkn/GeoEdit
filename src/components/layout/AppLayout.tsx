@@ -1,4 +1,6 @@
+import { useEffect } from 'react'
 import AppHeader from './AppHeader'
+import { useEditorStore } from '@/stores/editorStore'
 import ResizeHandle from './ResizeHandle'
 import MapPane from '@/components/map/MapPane'
 import RightSidebar from '@/components/sidebar/RightSidebar'
@@ -26,6 +28,16 @@ export default function AppLayout() {
   const showExport = useUiStore((s) => s.showExport)
   const setShowExport = useUiStore((s) => s.setShowExport)
   const exportRoute = useRouteStore((s) => s.routes.find((r) => r.id === s.selectedRouteId))
+  const sidebarCollapsed = useUiStore((s) => s.sidebarCollapsed)
+  const setSidebarCollapsed = useUiStore((s) => s.setSidebarCollapsed)
+  const bottomCollapsed = useUiStore((s) => s.bottomCollapsed)
+  const setBottomCollapsed = useUiStore((s) => s.setBottomCollapsed)
+  const mode = useEditorStore((s) => s.mode)
+
+  // 「ポイント情報」は右側のパネルに出すので、折りたたんでいたら開く（何も出ないように見えないように）
+  useEffect(() => {
+    if (mode === 'pointInfo' && breakpoint === 'desktop' && useUiStore.getState().sidebarCollapsed) setSidebarCollapsed(false)
+  }, [mode, breakpoint, setSidebarCollapsed])
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-[var(--color-bg)]">
@@ -41,10 +53,11 @@ export default function AppLayout() {
         </div>
         {/* PC（>=1024px）: 常時表示。タブレット（768〜1024px）: ヘッダーのボタンで、右から重ねて出す。
             モバイル（<768px）: ヘッダーのボタンで、画面の下からシートを出す（D5） */}
-        {breakpoint === 'desktop' && (
+        {/* 折りたたむと、パネルもハンドルも出さない（その分、地図が広がる） */}
+        {breakpoint === 'desktop' && !sidebarCollapsed && (
           <>
             <ResizeHandle orientation="vertical" value={sidebarWidth} min={MIN_SIDEBAR} max={MAX_SIDEBAR} onChange={setSidebarWidth} label="右側のパネルの幅" />
-            <RightSidebar width={sidebarWidth} />
+            <RightSidebar width={sidebarWidth} onCollapse={() => setSidebarCollapsed(true)} />
           </>
         )}
         {breakpoint === 'tablet' && sidebarOpen && (
@@ -84,8 +97,12 @@ export default function AppLayout() {
           </div>
         </>
       )}
-      <ResizeHandle orientation="horizontal" value={bottomPaneHeight} min={MIN_BOTTOM} max={MAX_BOTTOM} onChange={setBottomPaneHeight} label="下側のタイムラインの高さ" />
-      <BottomPane height={bottomPaneHeight} />
+      {!bottomCollapsed && (
+        <>
+          <ResizeHandle orientation="horizontal" value={bottomPaneHeight} min={MIN_BOTTOM} max={MAX_BOTTOM} onChange={setBottomPaneHeight} label="下側のタイムラインの高さ" />
+          <BottomPane height={bottomPaneHeight} onCollapse={() => setBottomCollapsed(true)} />
+        </>
+      )}
       <ToastContainer />
       <HelpDialog />
       <ConfirmDialog />

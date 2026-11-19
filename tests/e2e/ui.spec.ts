@@ -134,7 +134,7 @@ test('リサイズハンドルは矢印キーでも動く', async ({ page }) => 
 test('モバイル: ヘッダーのボタンで、ルートなどのパネルが下からのシートで開く', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 })
   await openFilesViaButton(page, 'sample.gpx')
-  await page.getByRole('button', { name: 'サイドバーの表示/非表示' }).click()
+  await page.getByRole('button', { name: '右側のパネルを開く' }).click()
   const sheet = page.getByRole('region', { name: 'ルート・レイヤー・属性・統計' })
   await expect(sheet).toBeVisible()
   await expect(sheet.getByText('sample', { exact: false }).first()).toBeVisible()

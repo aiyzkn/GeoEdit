@@ -102,7 +102,22 @@ export default function MapPane() {
     mapInstanceRef.current = map
     setMapInstance(map)
 
+    // Leaflet は window の大きさの変化しか見ない。パネルの折りたたみ・リサイズで入れ物だけが変わったときに、
+    // 広がった部分のタイルが描かれないままにならないよう、入れ物を見張って知らせる
+    const container = mapRef.current
+    let rafId: number | null = null
+    const ro = new ResizeObserver(() => {
+      if (rafId != null) return
+      rafId = requestAnimationFrame(() => {
+        rafId = null
+        map.invalidateSize({ pan: false })
+      })
+    })
+    ro.observe(container)
+
     return () => {
+      ro.disconnect()
+      if (rafId != null) cancelAnimationFrame(rafId)
       map.remove()
       mapInstanceRef.current = null
       setMapInstance(null)
