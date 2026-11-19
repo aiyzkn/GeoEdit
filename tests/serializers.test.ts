@@ -80,7 +80,7 @@ test('serializeGpx: XML特殊文字はエスケープされる', () => {
 
 test('serializeGpx: creator にアプリ名が入る', () => {
   const xml = serializeGpx(route(), 'original')
-  assert.match(xml, /creator="GeoJSON \/ GPX \/ KML Editor"/)
+  assert.match(xml, /creator="Route Editor"/)
 })
 
 // ── GeoJSON ──────────────────────────────────────────────────────────

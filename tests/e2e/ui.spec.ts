@@ -39,7 +39,7 @@ test('ヘルプダイアログを開閉できる', async ({ page }) => {
 test('バージョン情報ダイアログを開ける', async ({ page }) => {
   await page.getByRole('button', { name: /バージョン情報/ }).click()
   const dialog = page.getByRole('dialog')
-  await expect(dialog.getByRole('heading', { name: 'GeoJSON / GPX / KML Editor' })).toBeVisible()
+  await expect(dialog.getByRole('heading', { name: 'Route Editor' })).toBeVisible()
   // "v1.0.0" はタイトルと変更履歴の両方に出るため first() でタイトル側に限定する
   await expect(dialog.getByText('v1.0.0').first()).toBeVisible()
   await expect(dialog.getByText('技術スタック')).toBeVisible()
@@ -140,4 +140,11 @@ test('モバイル: ヘッダーのボタンで、ルートなどのパネルが
   await expect(sheet.getByText('sample', { exact: false }).first()).toBeVisible()
   await sheet.getByRole('button', { name: '閉じる' }).click()
   await expect(sheet).toBeHidden()
+})
+
+test('アプリケーション名は「Route Editor」（ページのタイトル・ヘッダー・地図の空のときの見出し）', async ({ page }) => {
+  await expect(page).toHaveTitle('Route Editor')
+  await expect(page.locator('header').getByText('Route Editor', { exact: true })).toBeVisible()
+  await expect(page.getByText('Route Editor', { exact: true })).toHaveCount(2)
+  await expect(page.getByText('GeoJSON / GPX / KML Editor')).toHaveCount(0)
 })
