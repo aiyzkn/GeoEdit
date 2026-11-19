@@ -98,30 +98,6 @@ test('探索は、反対向きの車線のランプより、左のランプを�
 
 // ── 2026-11-16 の追加（詳細設計書 §14.6） ──────────────────────────
 
-test('高速のランプの対（並んで走る出口と入口）は、弱い一方通行（±2）。逆向きは罰則つきで通れる', () => {
-  // 東西に並ぶ 2 本のランプ（分離帯なし。20 格子 ≒ 10 m 離れている）
-  const g = graphOf(makeTile([
-    { cls: 6, pts: [[0, 1990], [4000, 1990]] }, // 北の線
-    { cls: 6, pts: [[0, 2010], [4000, 2010]] }, // 南の線
-  ]))
-  assert.equal(g.oneway(0), 2) // 東行き（a → b）が正しい向き
-  assert.equal(g.oneway(1), -2)
-  // 北の線を西へ（逆向き）: 通れるが、罰則の分だけコストが増える
-  const fwd = search(g, posAt(g, 1000, 1990), posAt(g, 3000, 1990), STANDARD)!
-  const back = search(g, posAt(g, 3000, 1990), posAt(g, 1000, 1990), STANDARD)!
-  assert.ok(back)
-  assert.ok(Math.abs(fwd.distance - back.distance) < 1)
-  // 始点の辺は、逆向きでも罰則なし（置いた点からは、どちらへも出られる）。別の辺へ入るときに足す
-  const g2 = graphOf(makeTile([
-    { cls: 6, pts: [[0, 1990], [2000, 1990]] },
-    { cls: 6, pts: [[2000, 1990], [4000, 1990]] },
-    { cls: 6, pts: [[0, 2010], [4000, 2010]] },
-  ]))
-  const f2 = search(g2, posAt(g2, 1000, 1990), posAt(g2, 3000, 1990), STANDARD)!
-  const b2 = search(g2, posAt(g2, 3000, 1990), posAt(g2, 1000, 1990), STANDARD)!
-  assert.ok(Math.abs(b2.cost - f2.cost - ONEWAY.softWrongWayM) < 1, `cost ${f2.cost} ${b2.cost}`)
-})
-
 test('探索は、いま通った辺をそのまま引き返さない（行き止まりを除く）', () => {
   // 東行きの国道から、(2000, 2000) で北の県道へ。北へ曲がるのに大きなコストがかかっても、
   // 「先の交差点 (3000, 2000) まで行って戻る」経路にはならない
@@ -137,15 +113,63 @@ test('探索は、いま通った辺をそのまま引き返さない（行き�
   assert.ok(search(g, posAt(g, 3500, 2000), posAt(g, 500, 2000), STANDARD))
 })
 
-test('ランプから一般道へ: 鋭い折り返し（100° 超）には罰則。直角・浅い角度は 0', () => {
-  const g = graphOf(makeTile([
-    { cls: 6, pts: [[0, 2400], [1000, 2400], [2000, 2000]] },   // 0 東北東へ進んで国道へ合流するランプ
-    { cls: 4, med: 1, pts: [[2000, 2000], [4000, 2000]] },      // 1 国道（東）
-    { cls: 4, med: 1, pts: [[0, 2000], [2000, 2000]] },         // 2 国道（西）
-    { cls: 6, pts: [[2000, 3000], [2000, 2000]] },              // 3 真南から直角に来るランプ
+// 東西に走る国道（分離帯のある 1 本の線）に、(2000, 2000) でランプがつながる
+function junction(ramp: [number, number][]) {
+  return graphOf(makeTile([
+    { cls: 4, med: 1, pts: [[0, 2000], [2000, 2000]] },   // 0 国道（西）
+    { cls: 4, med: 1, pts: [[2000, 2000], [4000, 2000]] }, // 1 国道（東）
+    { cls: 6, pts: ramp },                                 // 2 ランプ（a = 先頭の点）
   ]))
-  assert.equal(g.turnCost(0, 0, 1, 0), 0) // そのまま東へ
-  assert.equal(g.turnCost(0, 0, 2, 1), ONEWAY.wrongSideRampM) // 西へ折り返す
-  assert.equal(g.turnCost(3, 0, 1, 0), 0) // 直角は右折も左折も 0
-  assert.equal(g.turnCost(3, 0, 2, 1), 0)
+}
+
+test('ランプと分離帯のある道路: ランプが付いている側の車線にしか出入りできない（左側通行）', () => {
+  // 北西から来て合流するランプ（国道の北側に沿う）。a = 遠い端、b = つなぎ目
+  const north = junction([[1000, 1700], [1800, 1950], [2000, 2000]])
+  assert.equal(north.turnCost(2, 0, 1, 0), 0) // ランプ → 東行き: 北 = 東行きの左後ろから合流
+  assert.equal(north.turnCost(2, 0, 0, 1), ONEWAY.wrongSideRampM) // ランプ → 西行き: 折り返し
+  assert.equal(north.turnCost(1, 1, 2, 1), ONEWAY.wrongSideRampM) // 西行き → ランプ: 北は西行きの右
+  assert.equal(north.turnCost(0, 0, 2, 1), ONEWAY.wrongSideRampM) // 東行き → ランプ: 後ろへは出られない
+  // 南西から来るランプ（国道の南側に沿う）= 西行きから分かれる入口用
+  const south = junction([[1000, 2300], [1800, 2050], [2000, 2000]])
+  assert.equal(south.turnCost(1, 1, 2, 1), 0) // 西行き → ランプ: 南 = 西行きの左前へ分岐
+  assert.equal(south.turnCost(2, 0, 1, 0), ONEWAY.wrongSideRampM) // ランプ（逆走）→ 東行き: 南は東行きの右
+  assert.equal(south.turnCost(2, 0, 0, 1), ONEWAY.wrongSideRampM) // ランプ（逆走）→ 西行き: 折り返し
+})
+
+test('ランプが短い直角の線で中心線につながっていても、ランプの位置で判断する', () => {
+  // 北側を東へ進み、最後の 15 m だけ真南へ折れて中心線につながる
+  const g = junction([[1000, 1970], [1970, 1970], [2000, 2000]])
+  assert.equal(g.turnCost(2, 0, 1, 0), 0)
+  assert.equal(g.turnCost(2, 0, 0, 1), ONEWAY.wrongSideRampM)
+})
+
+test('道路にほぼ直角につながるランプ（交差点）は、どちらへも曲がれる', () => {
+  const g = junction([[2000, 3000], [2000, 2000]])
+  assert.equal(g.turnCost(2, 0, 1, 0), 0)
+  assert.equal(g.turnCost(2, 0, 0, 1), 0)
+  assert.equal(g.turnCost(0, 0, 2, 1), 0)
+})
+
+test('分離帯の無い道路とランプの間は見ない', () => {
+  const g = graphOf(makeTile([
+    { cls: 4, pts: [[0, 2000], [2000, 2000]] },
+    { cls: 4, pts: [[2000, 2000], [4000, 2000]] },
+    { cls: 6, pts: [[1000, 2300], [1800, 2050], [2000, 2000]] },
+  ]))
+  assert.equal(g.turnCost(2, 0, 1, 0), 0)
+})
+
+test('上下線を兼ねる道が 2 本のランプに分かれる所では、進む向きから見て左のランプだけが正しい（道が曲がっていてもよい）', () => {
+  // 東へ進む道（高速・分離帯あり）が (2000, 2000) で終わり、南東へのランプと、南へのランプに分かれる。
+  // どちらも進む向きの右へ出るが、左側（南東）が出口用、右側（南）が入口用
+  const g = graphOf(makeTile([
+    { cls: 6, med: 1, pts: [[0, 2000], [2000, 2000]] },   // 0 道
+    { cls: 6, pts: [[2000, 2000], [2600, 2300]] },         // 1 南東へ
+    { cls: 6, pts: [[2000, 2000], [2100, 2700]] },         // 2 南へ
+  ]))
+  assert.equal(g.turnCost(0, 0, 1, 0), 0)
+  assert.equal(g.turnCost(0, 0, 2, 0), ONEWAY.wrongSideRampM)
+  // 逆向き（ランプから道へ入って西へ進む）: 西行きから見て左（南）のランプだけが正しい
+  assert.equal(g.turnCost(2, 1, 0, 1), 0)
+  assert.equal(g.turnCost(1, 1, 0, 1), ONEWAY.wrongSideRampM)
 })

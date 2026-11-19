@@ -12,10 +12,8 @@ export const ONEWAY = {
   /** 相手の線を探す距離（高速 / 分離帯のある一般道） */
   reachMotorwayM: 45,
   reachDividedM: 30,
-  /** ランプの対（並んで走る出口と入口）を探す距離 */
-  reachRampM: 30,
-  /** 弱い一方通行（ランプの対）を逆向きに通るときの罰則（m 相当。辺ごと） */
-  softWrongWayM: 3000,
+  /** ランプが一般道のどちら側に付いているかを見る点の、つなぎ目からの距離（格子。約 60 m） */
+  rampProbeUnits: 120,
   /** これより近い線は、相手とみなさない（同じ線の重なりなど） */
   minGapM: 3,
   /** 平行とみなす角度（cos 25°） */
@@ -64,7 +62,6 @@ export class RoadGraph {
   private readonly cumCache = new Map<number, Float64Array>()
   /** 辺 → [一方通行の向き, 求めたときのタイルの枚数]。タイルが増えたら求め直す（隣のタイルに相手の線があることがある） */
   private readonly onewayCache = new Map<number, [number, number]>()
-  readonly softWrongWayCost = ONEWAY.softWrongWayM
 
   get edgeCount(): number {
     return this.edgeA.length
@@ -257,7 +254,6 @@ export class RoadGraph {
 
   /**
    * 一方通行の向きを推定する（§14）: 1 = a → b だけ、-1 = b → a だけ、0 = 両方向（分からない）。
-   * ±2 は弱い一方通行（高速のランプの対。逆向きは罰則つきで通れる）。
    * タイルに一方通行の属性は無いが、高速道路と分離帯のある道路は、上下線が別々の線になっていることがある。
    * 近くに平行な相手の線があれば、日本は左側通行なので「相手の線が右側に来る向き」だけを通れるとする。
    * 両側に平行な線がある（ランプ・側道が並ぶ）所は決めない
@@ -273,13 +269,12 @@ export class RoadGraph {
   private computeOneway(e: number): number {
     const cls = this.edgeCls[e]
     const isMw = cls === 6
-    // 対象: 分離帯のある線（上下線が別々の線になっている本線・一般道）と、高速のランプ（分離帯なし。2 本並ぶ出入口の対）。
-    // ランプの対は、同じ向きの 2 本が並ぶ所もありうるので「弱い一方通行」（±2。逆向きは罰則つきで通れる）にする
-    const isRamp = isMw && !this.edgeMed[e]
-    if (!this.edgeMed[e] && !isRamp) return 0
+    // 対象: 分離帯のある線（上下線が別々の線になっている本線・一般道）。
+    // ランプ（高速で分離帯なし）は決めない。並んだランプを対とみなす推定は、所沢 IC で誤った向きを出したのでやめた（§14.7）
+    if (!this.edgeMed[e]) return 0
     if (this.edgeLen[e] < 5) return 0
     const mpu = metersPerUnit(this.nodeLat[this.edgeA[e]])
-    const reach = (isRamp ? ONEWAY.reachRampM : isMw ? ONEWAY.reachMotorwayM : ONEWAY.reachDividedM) / mpu
+    const reach = (isMw ? ONEWAY.reachMotorwayM : ONEWAY.reachDividedM) / mpu
     const minGap = ONEWAY.minGapM / mpu
     let votes = 0, samples = 0
     for (const t of [0.25, 0.5, 0.75]) {
@@ -316,7 +311,7 @@ export class RoadGraph {
       votes += right ? 1 : -1
     }
     if (samples === 0 || Math.abs(votes) !== samples) return 0 // 点によって結果が割れた
-    return (votes > 0 ? 1 : -1) * (isRamp ? 2 : 1)
+    return votes > 0 ? 1 : -1
   }
 
   /** 2 つの辺が、同じノードでじかにつながっているか（分岐・合流の直後で並んでいるだけの線） */
@@ -365,16 +360,59 @@ export class RoadGraph {
       const left = bx * ay - by * ax // 画面の座標（y が下向き）で、正 = 左へ曲がる
       if (dot < ONEWAY.maxTurnCos) return Infinity
       if (this.edgeMed[e1] === this.edgeMed[e2]) return 0 // 本線どうし・ランプどうし
+      // 分離帯のある線（上下線を兼ねる）と、ランプ（一方通行）の間。
+      // つなぎ目にランプが 2 本以上ある（上下線を兼ねる道が、出口用と入口用のランプに分かれる。料金所の先など）ときは、
+      // 道の進む向きから見て、いちばん左のランプだけが正しい（道が曲がっていると、正しいランプが少し右へ出ることがある）
+      const node = dir1 === 0 ? this.edgeB[e1] : this.edgeA[e1]
+      const rampIsNext = !this.edgeMed[e2]
+      const ramp = rampIsNext ? e2 : e1
+      // 道の進む向き（ランプへ出るときは出る直前、ランプから入るときは入った直後）
+      const tx = rampIsNext ? ax : bx, ty = rampIsNext ? ay : by
+      const lateralOf = (e: number): number => {
+        // ランプ e の、つなぎ目から離れる向き（40 格子 ≒ 20 m 先まで）の、道の進む向きに対する左への成分
+        const away = this.edgeA[e] === node ? 0 : 1
+        const [vx, vy] = this.heading(e, away, 'in', 40)
+        return vx * ty - vy * tx
+      }
+      const others = this.adj[node].filter((e) => e !== ramp && this.edgeCls[e] === 6 && !this.edgeMed[e])
+      // 道がこのつなぎ目で終わっている（先へ続く分離帯のある高速の線が無い）ときだけ。
+      // 本線が先へ続く所（本線の途中の分岐・合流）は、下の「左だけ」の規則で見る
+      const trunk = rampIsNext ? e1 : e2
+      const through = this.adj[node].some((e) => e !== trunk && this.edgeCls[e] === 6 && this.edgeMed[e] === 1)
+      if (others.length > 0 && !through) {
+        const mine = lateralOf(ramp)
+        return others.every((e) => lateralOf(e) <= mine + 1e-9) ? 0 : ONEWAY.wrongSideRampM
+      }
+      // ランプが 1 本だけ（本線の途中から分かれる・合流する）: 左への浅い分岐・左からの合流だけが正しい
       return left >= -ONEWAY.straightSin && dot >= ONEWAY.rampMinCos ? 0 : ONEWAY.wrongSideRampM
     }
-    // ランプと一般道の間: 鋭い折り返し（100° 超）だけに罰則を足す（西行きへ合流するランプから東へ向かう、など）。
-    // ランプは短い直角の線で一般道の中心線につながることがあるので、端から 40 m（80 格子）手前までの向きで見る。
-    // 左右は見ない（信号のある交差点では右折もできる）
+    // ランプ（高速で分離帯なし）と、一般道の「分離帯のある 1 本の線」（上下線を兼ねる）の間（§14.7）。
+    // 日本は左側通行なので、道路に沿ってつながるランプは、付いている側の車線にしか出入りできない:
+    //   ランプ → 道路: ランプは、道路の進む向きの「左後ろ」から来る（左からの合流）
+    //   道路 → ランプ: ランプは、道路の進む向きの「左前」へ出る（左への分岐）
+    // ランプは短い直角の線で中心線につながることがあるので、角度ではなく、つなぎ目から 60 m 先のランプの位置で見る。
+    // 道路にほぼ直角につながるランプ（信号のある交差点など。右折もできる）は見ない
     const mw1 = this.edgeCls[e1] === 6, mw2 = this.edgeCls[e2] === 6
     if (mw1 === mw2) return 0
-    const [ax, ay] = this.heading(e1, dir1, 'out', mw1 ? 80 : 8)
-    const [bx, by] = this.heading(e2, dir2, 'in', mw2 ? 80 : 8)
-    return ax * bx + ay * by < ONEWAY.maxTurnCos ? ONEWAY.wrongSideRampM : 0
+    const ramp = mw1 ? e1 : e2, road = mw1 ? e2 : e1
+    if (this.edgeMed[ramp] || !this.edgeMed[road]) return 0
+    // つなぎ目のノードと、道路の進む向き
+    const node = dir1 === 0 ? this.edgeB[e1] : this.edgeA[e1]
+    const [tx, ty] = mw1 ? this.heading(e2, dir2, 'in') : this.heading(e1, dir1, 'out')
+    // ランプの上の、つなぎ目から 60 m（120 格子）離れた点（辺が短ければ、遠い端）
+    const rampFromStart = mw1 ? dir1 === 1 : dir2 === 0 // つなぎ目が、ランプの辺の a 側（形の先頭）にあるか
+    const n = this.shapeLength(ramp)
+    const nx = this.nodeX[node], ny = this.nodeY[node]
+    let px = nx, py = ny
+    for (let i = 0; i < n; i++) {
+      ;[px, py] = this.shapePoint(ramp, rampFromStart ? i : n - 1 - i)
+      if (Math.hypot(px - nx, py - ny) >= ONEWAY.rampProbeUnits) break
+    }
+    const along = (px - nx) * tx + (py - ny) * ty
+    const lateral = (px - nx) * ty - (py - ny) * tx // 画面の座標（y が下向き）で、正 = 道路の進む向きの左
+    if (Math.abs(along) < Math.abs(lateral)) return 0 // 直角に近い
+    const ok = lateral > 0 && (mw1 ? along < 0 : along > 0)
+    return ok ? 0 : ONEWAY.wrongSideRampM
   }
 
   /** 世界座標の矩形にかかる [辺, 線分の番号] の並び（重複あり） */

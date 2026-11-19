@@ -258,6 +258,8 @@ export class LaneMatcher {
     }
     const total = s
     if (total < 2 * LANE.stepPx) return points
+    // 両端で 0 に戻す区間が短いと、寄せてすぐ戻すだけの小さな折れになるので、合わせない（60 m 未満）
+    if (opts.taperStart !== false && opts.taperEnd !== false && total < 3 * LANE.taperPx) return points
     // 2. 画像のタイルを取る
     const keys = new Set<string>()
     const sp = opts.motorway ? MOTORWAY_SCAN : ROAD_SCAN
