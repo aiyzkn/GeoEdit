@@ -102,3 +102,26 @@ test('countWaypointsInRange: 両端を除く', () => {
   assert.equal(countWaypointsInRange(pts, 2, 4), 0) // 端の 2 は数えない
   assert.equal(countWaypointsInRange(pts, 3, 1), 1)
 })
+
+test('replace（match）: 道に合わせた下書きは、時刻・標高・ウェイポイントを元の点から移す', () => {
+  const routes = [route(true)]
+  const snapshot = JSON.stringify(routes)
+  // 元の点 1〜3 の間（#2 にウェイポイント）を、道に合わせた 4 点で置き換える
+  const r = applyDraft(routes, {
+    target: { kind: 'replace', routeId: 'r1', trackIndex: 0, startIndex: 1, endIndex: 3, match: true },
+    points: [P(139.01), P(139.015), P(139.0201), P(139.025), P(139.03)],
+    speed: WALK,
+  })
+  assert.ok(r.ok)
+  assert.equal(r.undoLabel, '道に合わせる')
+  const pts = r.routes[0].tracks[0].points
+  assert.equal(pts.length, 7)
+  assert.equal(pts[1], routes[0].tracks[0].points[1])
+  assert.equal(pts[5], routes[0].tracks[0].points[3])
+  const wp = pts.findIndex((p) => p.waypoint?.name === 'WP')
+  assert.equal(wp, 3) // P(139.0201) に移る
+  for (let i = 1; i < pts.length; i++) assert.ok(pts[i].time!.getTime() >= pts[i - 1].time!.getTime())
+  assert.equal(pts[2].ele, 11.5)
+  assert.equal(pts[3]._extensions, undefined) // 拡張データは移さない
+  assert.equal(JSON.stringify(routes), snapshot)
+})

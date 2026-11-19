@@ -206,7 +206,7 @@ export async function startMatch(routeId: string, trackIndex: number, startIndex
   if (r.matched === 0) return { ok: false, error: 'no-road' }
   const d = draftFromMatch(pts[s], pts[e], r.sections)
   if (!d) return { ok: false, error: 'failed' }
-  store().startDraft(d, { kind: 'replace', routeId, trackIndex, startIndex: s, endIndex: e })
+  store().startDraft(d, { kind: 'replace', routeId, trackIndex, startIndex: s, endIndex: e, match: true })
   const kept = r.sections.filter((x) => x.kind === 'kept')
   return { ok: true, observed: r.observed, matched: r.matched, keptSections: kept.length, keptPoints: kept.reduce((a, x) => a + x.input[1] - x.input[0] + 1, 0) }
 }
