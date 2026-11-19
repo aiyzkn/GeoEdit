@@ -156,3 +156,71 @@ export function draftPointsSimplified(d: Draft, simplify: boolean): LL[] {
 export function draftDistance(d: Draft): number {
   return d.legs.reduce((s, l) => s + l.distance, 0)
 }
+
+/** 道に合わせた区間に、通過点を置く間隔の目安（m）。区間を短くして、手直し・引き直しを近くだけに効かせる */
+export const MATCH_ANCHOR_EVERY_M = 1000
+
+/** トラックのマップマッチングの結果の区間（routing の TrackMatchSection と同じ形。'@/' を使わないため、ここで受ける形だけを書く） */
+export interface MatchedSectionLike {
+  kind: 'matched' | 'kept'
+  points: LL[]
+}
+
+/**
+ * トラックのマップマッチングの結果を、道なり補正の下書きにする（トラックのマップマッチング設計書 §8 段階 2）。
+ * - 両端（start・end。元のトラックの点）は固定の通過点
+ * - 道に合わせた区間（matched）は auto・ok の区間。everyM ごとに通過点を置いて分ける
+ * - 元の点を残した区間（kept）は straight の区間で、元の点の列をそのまま持つ
+ * - 区間の境目に通過点を置く（動かせる）
+ * 区間が無ければ null
+ */
+export function draftFromMatch(start: LL, end: LL, sections: MatchedSectionLike[], everyM: number = MATCH_ANCHOR_EVERY_M): Draft | null {
+  if (sections.length === 0) return null
+  const anchors: CreateAnchor[] = [{ id: newId('a-'), lat: start.lat, lng: start.lng, locked: true }]
+  const legs: CreateLeg[] = []
+  const push = (mode: LegMode, pts: LL[]) => {
+    const from = anchors[anchors.length - 1]
+    const points: LL[] = [ll(from)]
+    for (const p of pts) {
+      const last = points[points.length - 1]
+      if (last.lat !== p.lat || last.lng !== p.lng) points.push(ll(p))
+    }
+    if (points.length < 2) return
+    const to = points[points.length - 1]
+    let distance = 0
+    for (let i = 1; i < points.length; i++) distance += distanceLL(points[i - 1], points[i])
+    anchors.push({ id: newId('a-'), lat: to.lat, lng: to.lng })
+    legs.push({ id: newId('leg-'), mode, status: 'ok', points, distance, gen: 0 })
+  }
+  for (const sec of sections) {
+    if (sec.kind === 'kept') { push('straight', sec.points); continue }
+    // everyM ごとに切る（切る点は、前の区間の末尾と次の区間の先頭で共有する）
+    let piece: LL[] = []
+    let acc = 0
+    for (let i = 0; i < sec.points.length; i++) {
+      const p = sec.points[i]
+      if (piece.length > 0) acc += distanceLL(piece[piece.length - 1], p)
+      piece.push(p)
+      if (acc >= everyM && i < sec.points.length - 1) {
+        push('auto', piece)
+        piece = [p]
+        acc = 0
+      }
+    }
+    push('auto', piece)
+  }
+  if (legs.length === 0) return null
+  // 最後の通過点は、元のトラックの終点に固定する
+  const lastLeg = legs[legs.length - 1]
+  const lastPts = [...lastLeg.points]
+  const tail = lastPts[lastPts.length - 1]
+  if (tail.lat !== end.lat || tail.lng !== end.lng) {
+    if (lastPts.length > 2 || lastLeg.mode === 'straight') lastPts[lastPts.length - 1] = ll(end)
+    else lastPts.push(ll(end))
+  }
+  let distance = 0
+  for (let i = 1; i < lastPts.length; i++) distance += distanceLL(lastPts[i - 1], lastPts[i])
+  legs[legs.length - 1] = { ...lastLeg, points: lastPts, distance }
+  anchors[anchors.length - 1] = { ...anchors[anchors.length - 1], lat: end.lat, lng: end.lng, locked: true }
+  return { anchors, legs }
+}

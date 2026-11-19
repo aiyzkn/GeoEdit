@@ -2,16 +2,18 @@
 // 最初に使ったときに Worker を作る。Worker を作れない環境では、同じスレッドで Router を直接呼ぶ。
 
 import { Router } from '@/lib/routing'
-import type { LatLng, RouteResult, RoutingOptions } from '@/lib/routing'
+import type { LatLng, MatchParams, RouteResult, RoutingOptions, TrackMatchResult } from '@/lib/routing'
 
 export type RoutingWorkerRequest =
   | { type: 'snap'; id: number; lat: number; lng: number; options: RoutingOptions }
   | { type: 'route'; id: number; from: LatLng; to: LatLng; options: RoutingOptions }
+  | { type: 'match'; id: number; points: LatLng[]; options: RoutingOptions; match?: MatchParams }
   | { type: 'cancel'; id: number }
 
 export type RoutingWorkerResponse =
   | { type: 'snap'; id: number; point: LatLng | null }
   | { type: 'route'; id: number; result: RouteResult }
+  | { type: 'match'; id: number; result: TrackMatchResult | null }
   | { type: 'progress'; id: number; done: number; total: number }
 
 type Progress = (done: number, total: number) => void
@@ -38,7 +40,7 @@ function getWorker(): Worker | null {
       if (!p) return
       if (msg.type === 'progress') { p.onProgress?.(msg.done, msg.total); return }
       pending.delete(msg.id)
-      p.resolve(msg.type === 'snap' ? msg.point : msg.result)
+      p.resolve(msg.type === 'snap' ? msg.point : msg.type === 'match' ? { value: msg.result } : msg.result)
     }
     worker.onerror = () => {
       // Worker が落ちたら、待っている要求を直線で返し、以後は同じスレッドで動かす
@@ -87,4 +89,19 @@ export async function routeLeg(from: LatLng, to: LatLng, options: RoutingOptions
     // Worker が落ちた: 同じスレッドでやり直す
   }
   return local().routeLeg(from, to, options, signal, onProgress)
+}
+
+/**
+ * 既存の軌跡を道に合わせる（トラックのマップマッチング設計書）。道が見つからない区間は元の点を残す。
+ * タイルを取れない・中止・軌跡が長すぎるときは null
+ */
+export async function matchTrack(points: LatLng[], options: RoutingOptions, signal?: AbortSignal, onProgress?: Progress, match?: MatchParams): Promise<TrackMatchResult | null> {
+  if (getWorker()) {
+    // Worker の結果は { value } で包む（null の結果と、Worker が落ちたときの null を区別するため）
+    const r = await send<{ value: TrackMatchResult | null }>((id) => ({ type: 'match', id, points, options, match }), signal, onProgress)
+    if (r) return r.value
+    if (signal?.aborted) return null
+    // Worker が落ちた: 同じスレッドでやり直す
+  }
+  return local().matchTrack(points, options, match, signal, onProgress)
 }

@@ -16,7 +16,7 @@ import { draftPointsSimplified, draftDistance, DRAFT_SIMPLIFY_M } from '@/lib/ed
 import { computeGainLoss } from '@/lib/routeStats'
 import { useDraftProfileSync } from '@/hooks/useDraftProfile'
 import SpeedSelect from '@/components/properties/SpeedSelect'
-import { removeLastAnchor, rerouteAll, startAppend, startNew, startReplace } from '@/lib/draftController'
+import { cancelMatch, removeLastAnchor, rerouteAll, startAppend, startMatch, startNew, startReplace } from '@/lib/draftController'
 import { applyDraft, countWaypointsInRange } from '@/lib/editors/draftApply'
 import { Settings2 } from 'lucide-react'
 import type { RouteData, TrackPoint } from '@/types/route'
@@ -59,6 +59,7 @@ export default function EditModePanel() {
   const [splitName2, setSplitName2] = useState('')
   const [useFallbackEle, setUseFallbackEle] = useState(true)
   const [replacing, setReplacing] = useState(false)
+  const [matching, setMatching] = useState(false)
   const [showRoutingSettings, setShowRoutingSettings] = useState(false)
 
   // EditModePanel はアプリ全体で1度だけマウントされ、モード切替時に再マウントされない。
@@ -418,6 +419,23 @@ export default function EditModePanel() {
 
   confirmRef.current = handleCreateConfirm
 
+  /** 軌跡を道に合わせ、道なり補正の下書きにする（確定・キャンセルは道なり補正と同じ） */
+  const handleMatch = async (routeId: string, trackIndex: number, startIndex: number, endIndex: number) => {
+    setMatching(true)
+    const r = await startMatch(routeId, trackIndex, startIndex, endIndex)
+    setMatching(false)
+    if (r.ok) {
+      const kept = r.keptPoints > 0 ? `。道が見つからない ${r.keptSections} か所（${r.keptPoints} 点）は元の点を残しました` : ''
+      addToast('success', `道に合わせました（観測 ${r.observed} 点のうち ${r.matched} 点${kept}）。確定するまで元のトラックは変わりません`)
+      return
+    }
+    if (r.error === 'aborted') return
+    addToast(r.error === 'bad-range' ? 'info' : 'error',
+      r.error === 'bad-range' ? '始点と終点に、違う点を選んでください'
+        : r.error === 'no-road' ? '近くに道が見つかりませんでした'
+          : '道に合わせられませんでした（道路データを取得できない、または軌跡が長すぎます）')
+  }
+
   modeConfirmRef.current = () => {
     // 処理の最中は何もしない（二重の確定を防ぐ）
     if (useEditorStore.getState().isBusy || creating || replacing) return
@@ -467,6 +485,30 @@ export default function EditModePanel() {
           >
             引き直す
           </button>
+          <button
+            onClick={() => { if (selection) void handleMatch(selection.routeId, selection.trackIndex, selection.startIndex, selection.endIndex) }}
+            disabled={matching || !selection || selection.startIndex === selection.endIndex}
+            className="px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-500 disabled:opacity-40"
+            title="選んだ区間の軌跡（GPS のログなど）を、通った道に合わせる。道が見つからない所は元の点を残す"
+          >
+            道に合わせる
+          </button>
+          <button
+            onClick={() => { if (route && track) void handleMatch(route.id, selectedTrackIndex, 0, track.points.length - 1) }}
+            disabled={matching || !track || track.points.length < 2}
+            className="px-2 py-1 bg-[var(--color-border)] rounded hover:opacity-80 disabled:opacity-40"
+            title="選択中のトラック全体の軌跡を、通った道に合わせる"
+          >
+            トラック全体を道に合わせる
+          </button>
+          {matching && (
+            <>
+              <span className="text-[var(--color-muted)]">
+                道に合わせています{routingProgress ? ` ${routingProgress.done}/${routingProgress.total}` : ''}
+              </span>
+              <button onClick={cancelMatch} className="px-2 py-1 bg-[var(--color-border)] rounded hover:opacity-80">中止</button>
+            </>
+          )}
         </div>
       )}
       {(mode === 'create' || (mode === 'reroute' && draftTarget.kind === 'replace')) && (

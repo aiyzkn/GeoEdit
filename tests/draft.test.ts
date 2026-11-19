@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   emptyDraft, addAnchor, insertAnchor, moveAnchor, removeAnchor, setLegResult, bumpPending,
-  resetAutoLegs, pendingLegs, draftPoints, draftDistance,
+  resetAutoLegs, pendingLegs, draftPoints, draftDistance, draftFromMatch,
 } from '../src/lib/editors/draft.ts'
 import type { Draft } from '../src/types/editor.ts'
 
@@ -118,4 +118,53 @@ test('bumpPending・resetAutoLegs・pendingLegs', () => {
   assert.equal(r.legs[1], d.legs[1]) // straight は変えない
   const b = bumpPending(r)
   assert.equal(b.legs[0].gen, 2)
+})
+
+// ── draftFromMatch（トラックのマップマッチング設計書 §8 段階 2） ──
+/** 緯度 35° で東へ n 点（約 91 m おき） */
+function east(n: number, lng0 = 139.0, lat = 35.0) {
+  return Array.from({ length: n }, (_, i) => ({ lat, lng: lng0 + i * 0.001 }))
+}
+
+function assertContiguous(d: Draft) {
+  assert.equal(d.anchors.length, d.legs.length + 1)
+  d.legs.forEach((l, i) => {
+    assert.deepEqual(l.points[0], { lat: d.anchors[i].lat, lng: d.anchors[i].lng })
+    assert.deepEqual(l.points[l.points.length - 1], { lat: d.anchors[i + 1].lat, lng: d.anchors[i + 1].lng })
+    assert.equal(l.status, 'ok')
+  })
+}
+
+test('draftFromMatch: 区間が無ければ null', () => {
+  assert.equal(draftFromMatch(A, B, []), null)
+})
+
+test('draftFromMatch: 道に合わせた区間は auto で、everyM ごとに切る。両端は元の点に固定', () => {
+  const pts = east(34) // 約 3 km
+  const start = { lat: 35.00005, lng: 139.0 }
+  const end = { lat: 35.00005, lng: pts[33].lng }
+  const d = draftFromMatch(start, end, [{ kind: 'matched', points: pts }], 1000)!
+  assertContiguous(d)
+  assert.ok(d.legs.length >= 3 && d.legs.length <= 4, `legs=${d.legs.length}`)
+  assert.ok(d.legs.every((l) => l.mode === 'auto'))
+  assert.deepEqual({ lat: d.anchors[0].lat, lng: d.anchors[0].lng }, start)
+  assert.deepEqual({ lat: d.anchors.at(-1)!.lat, lng: d.anchors.at(-1)!.lng }, end)
+  assert.equal(d.anchors[0].locked, true)
+  assert.equal(d.anchors.at(-1)!.locked, true)
+  // 距離は区間の点から測り直したもの
+  for (const l of d.legs) assert.ok(l.distance > 0)
+})
+
+test('draftFromMatch: 元の点を残した区間は straight で、元の点の列を持つ', () => {
+  const m1 = east(5)
+  const kept = [{ lat: 35.0005, lng: 139.0045 }, { lat: 35.001, lng: 139.005 }, { lat: 35.0005, lng: 139.0055 }]
+  const m2 = east(5, 139.006)
+  const d = draftFromMatch(m1[0], m2[4], [
+    { kind: 'matched', points: m1 },
+    { kind: 'kept', points: kept },
+    { kind: 'matched', points: m2 },
+  ])!
+  assertContiguous(d)
+  assert.deepEqual(d.legs.map((l) => l.mode), ['auto', 'straight', 'auto'])
+  assert.deepEqual(d.legs[1].points.slice(1), kept)
 })
