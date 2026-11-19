@@ -1,6 +1,35 @@
 import { Tag, Calendar } from 'lucide-react'
 import { APP_NAME, APP_VERSION, CHANGELOG } from '@/lib/version'
 import Modal from './Modal'
+import { useState } from 'react'
+import { isAutosaveEnabled, setAutosaveEnabled } from '@/lib/persistence/autosave'
+import { clearSession } from '@/lib/persistence/sessionDb'
+import { useUiStore } from '@/stores/uiStore'
+
+/** 自動保存の設定（designs/機能追加・UI改善設計書.md C1）。共用の PC に位置情報のログを残したくない人のため */
+function AutosaveSetting() {
+  const [on, setOn] = useState(isAutosaveEnabled)
+  return (
+    <section>
+      <h3 className="font-semibold text-[var(--color-muted)] uppercase tracking-wider text-[10px] mb-2">データの保存</h3>
+      <label className="flex items-center gap-2">
+        <input type="checkbox" checked={on} onChange={(e) => { setOn(e.target.checked); setAutosaveEnabled(e.target.checked) }} />
+        編集内容をこのブラウザに自動保存する（再読み込み・誤ってタブを閉じたときに復元できる）
+      </label>
+      <button
+        onClick={() => {
+          void clearSession().then(
+            () => useUiStore.getState().addToast('success', '保存したデータを消しました'),
+            () => useUiStore.getState().addToast('error', '保存したデータを消せませんでした'),
+          )
+        }}
+        className="mt-2 px-2 py-1 bg-[var(--color-border)] rounded hover:opacity-80"
+      >
+        保存したデータを消す
+      </button>
+    </section>
+  )
+}
 
 interface Props {
   onClose: () => void
@@ -31,6 +60,9 @@ export default function AboutDialog({ onClose }: Props) {
       footer="Cloudflare Pages にデプロイ · セマンティックバージョニング（メジャー.マイナー.パッチ）"
     >
       <div className="space-y-4">
+        {/* 自動保存（C1） */}
+        <AutosaveSetting />
+
         {/* Tech stack */}
         <section>
           <h3 className="font-semibold text-[var(--color-muted)] uppercase tracking-wider text-[10px] mb-2">

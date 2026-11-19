@@ -5,6 +5,7 @@ import type { RouteData, TrackPoint } from '@/types/route'
 import { emptyDraft } from '@/lib/editors/draft'
 import { ROUTING_SETTINGS_KEY, sanitizeSettings, type RoutingSettings } from '@/lib/routing/settings'
 import { WALK, type SpeedProfile } from '@/lib/editors/routeEditors'
+import { useUiStore } from '@/stores/uiStore'
 
 const MAX_UNDO = 50
 
@@ -109,19 +110,36 @@ interface EditorActions {
   clearPartialEdit: () => void
 }
 
-/**
- * 作成モードに未確定ポイントがある状態でモードを離れると setMode() が下書き（draft）を
- * 破棄するため、離脱前にユーザーへ確認する共通ガード。破棄してよい（または確認不要）なら
- * true を返す。モード切替の入口（ツールバー・Escapeキー）で setMode の前に呼ぶこと。
- * 確定ボタンは clearDraft() 後に setMode するためこのガードを通らない。
- */
-export function confirmDiscardCreatePoints(): boolean {
+/** 下書きに、捨てると失われる内容があるか（固定の通過点だけなら無い） */
+export function hasDraftWork(): boolean {
   const { mode, draft } = useEditorStore.getState()
-  if ((mode !== 'create' && mode !== 'reroute') || draft.anchors.filter((a) => !a.locked).length === 0 && draft.legs.length === 0) return true
-  return window.confirm(
-    `作成中のルートには未確定のポイントが ${draft.anchors.length} 点あります。\n` +
-      '確定せずに移動するとポイントは破棄されます。破棄してよろしいですか？'
-  )
+  if (mode !== 'create' && mode !== 'reroute') return false
+  return draft.legs.length > 0 || draft.anchors.some((a) => !a.locked)
+}
+
+/**
+ * 作成・道なり補正のモードを離れる前の確認（designs/機能追加・UI改善設計書.md C3）。
+ * keep = 作成を続ける / discard = 破棄して移動 / commit = 確定して移動。下書きが空なら確認せず discard
+ */
+export async function confirmLeaveDraft(): Promise<'keep' | 'discard' | 'commit'> {
+  if (!hasDraftWork()) return 'discard'
+  const { draft } = useEditorStore.getState()
+  const n = draft.anchors.filter((a) => !a.locked).length
+  const id = await useUiStore.getState().confirm({
+    title: '作成中のルートがあります',
+    message: `作成中のルートには未確定の通過点が ${n} 点あります。\n確定せずに移動すると、作成中の内容は破棄されます。`,
+    actions: [
+      { id: 'keep', label: '作成を続ける' },
+      { id: 'discard', label: '破棄して移動', kind: 'danger' },
+      { id: 'commit', label: '確定して移動', kind: 'primary' },
+    ],
+  })
+  return id === 'discard' || id === 'commit' ? id : 'keep'
+}
+
+/** 「確定して移動」: EditModePanel が受けて確定し、できたら then のモードへ移る */
+export function requestDraftCommit(then: EditMode) {
+  document.dispatchEvent(new CustomEvent('draft-commit', { detail: { then } }))
 }
 
 export const useEditorStore = create<EditorState & EditorActions>()(

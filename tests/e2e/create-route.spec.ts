@@ -6,7 +6,7 @@
  * クリック座標がそのまま採用されて決定的になる（MapPane.tsx の handleClick 参照）。
  *
  * あわせて「未確定ポイントがある状態で離脱すると確認ダイアログが出る」ガード
- * （confirmDiscardCreatePoints）も検証する。
+ * （confirmLeaveDraft。アプリの確認ダイアログ）も検証する。
  */
 import { test, expect, setup, selectMode } from './helpers'
 
@@ -44,17 +44,16 @@ test('未確定ポイントがある状態での離脱は確認ダイアログ�
   await map.click({ modifiers: ['Control'], position: { x: 300, y: 250 } })
   await expect(page.getByText('地図をクリックしてポイントを追加（1 点）')).toBeVisible()
 
-  // Escape 離脱時に window.confirm が出る。dismiss（キャンセル）すると作成モードに留まる
-  page.once('dialog', (dialog) => {
-    expect(dialog.message()).toContain('未確定のポイントが 1 点あります')
-    dialog.dismiss()
-  })
+  // Escape 離脱時に確認ダイアログが出る。「作成を続ける」で作成モードに留まる
   await page.keyboard.press('Escape')
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toContainText('未確定の通過点が 1 点あります')
+  await dialog.getByRole('button', { name: '作成を続ける' }).click()
   // まだ作成モードでポイントも保持されている
   await expect(page.getByText('地図をクリックしてポイントを追加（1 点）')).toBeVisible()
 
-  // 今度は accept（破棄OK）→ モードを抜ける
-  page.once('dialog', (dialog) => dialog.accept())
+  // 今度は「破棄して移動」→ モードを抜ける
   await page.keyboard.press('Escape')
+  await page.getByRole('dialog').getByRole('button', { name: '破棄して移動' }).click()
   await expect(page.getByText(/地図をクリックしてポイントを追加/)).toBeHidden()
 })

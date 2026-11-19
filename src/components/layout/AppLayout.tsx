@@ -5,6 +5,8 @@ import RightSidebar from '@/components/sidebar/RightSidebar'
 import BottomPane from '@/components/timeline/BottomPane'
 import ToastContainer from '@/components/common/ToastContainer'
 import HelpDialog from '@/components/common/HelpDialog'
+import ConfirmDialog from '@/components/common/ConfirmDialog'
+import RestoreBanner from '@/components/common/RestoreBanner'
 import EditToolbar from '@/components/toolbar/EditToolbar'
 import EditModePanel from '@/components/properties/EditModePanel'
 import { useUiStore } from '@/stores/uiStore'
@@ -78,8 +80,9 @@ export default function AppLayout() {
       <div className="flex flex-1 overflow-hidden relative">
         {/* isolate: Leaflet内部ペインのz-index（最大700）が独自のスタッキングコンテキストに
             閉じ込められないと、下記のサイドバーオーバーレイ（z-30/z-40）より上に描画されてしまうため */}
-        <div className="flex-1 overflow-hidden isolate">
+        <div className="flex-1 overflow-hidden isolate relative">
           <MapPane />
+          <RestoreBanner />
         </div>
         {/* PC（>=1024px）: 常時表示。タブレット（768〜1024px）: AppHeaderのトグルで手動展開、オーバーレイ表示。
             モバイル（<768px）: 基本設計書16.1により非表示（アクセス手段自体を提供しない） */}
@@ -111,6 +114,7 @@ export default function AppLayout() {
       <BottomPane height={bottomPaneHeight} />
       <ToastContainer />
       <HelpDialog />
+      <ConfirmDialog />
     </div>
   )
 }

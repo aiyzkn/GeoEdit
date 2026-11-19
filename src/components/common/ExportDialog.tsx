@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { useRouteStore } from '@/stores/routeStore'
+import { markClean } from '@/lib/persistence/dirty'
 import { Download } from 'lucide-react'
 import type { RouteData } from '@/types/route'
 import type { ExportOptions, GpxOutputMode } from '@/types/editor'
@@ -25,6 +27,9 @@ export default function ExportDialog({ route, onClose }: Props) {
 
   const handleExport = () => {
     exportRoute(route, { format, gpxMode }, fileName)
+    // 書き出した直後は「変更なし」（C2）
+    const current = useRouteStore.getState().routes.find((r) => r.id === route.id)
+    if (current) markClean(current)
     onClose()
   }
 

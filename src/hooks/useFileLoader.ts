@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { useRouteStore } from '@/stores/routeStore'
+import { isRouteDirty, markClean } from '@/lib/persistence/dirty'
 import { useUiStore } from '@/stores/uiStore'
 import { parseGpx } from '@/lib/parsers/gpxParser'
 import { parseKml } from '@/lib/parsers/kmlParser'
@@ -42,6 +43,9 @@ async function autoFillElevation(route: RouteData) {
   addToast('info', `標高データを自動取得中: ${route.name}`)
   const elevs = await fetchElevations(pts)
   let i = 0
+  // 読み込んだままのルートなら、補完したあとも「変更なし」のまま（C2）
+  const before = useRouteStore.getState().routes.find((r) => r.id === route.id)
+  const wasClean = !!before && !isRouteDirty(before)
   useRouteStore.getState().updateRoute(route.id, (r) => {
     if (r.kind === 'waypoint') {
       r.standaloneWaypoints.forEach((w) => { const e = elevs[i++]; if (e != null) w.ele = e })
@@ -49,6 +53,10 @@ async function autoFillElevation(route: RouteData) {
       r.tracks.forEach((t) => t.points.forEach((p) => { const e = elevs[i++]; if (e != null) p.ele = e }))
     }
   })
+  if (wasClean) {
+    const after = useRouteStore.getState().routes.find((r) => r.id === route.id)
+    if (after) markClean(after)
+  }
   const filled = elevs.filter((e) => e != null).length
   addToast('success', `標高データを自動補完しました（${route.name}）: ${filled}/${pts.length} ポイント`)
 }
@@ -96,6 +104,8 @@ export function useFileLoader() {
             addToast('warning', `ルートポイントが見つかりません: ${route.name}`)
           }
           addRoute(route)
+          const stored = useRouteStore.getState().routes.find((r) => r.id === route.id)
+          if (stored) markClean(stored) // 読み込んだ直後は「変更なし」（C2）
           loadedCount++
           void autoFillElevation(route)
         }
