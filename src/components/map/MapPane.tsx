@@ -28,6 +28,7 @@ import CreateRouteLayer from './CreateRouteLayer'
 import PartialEditLayer from './PartialEditLayer'
 import PlaceSearch from './PlaceSearch'
 import BaseMapSwitcher from './BaseMapSwitcher'
+import LocateControl from './LocateControl'
 
 function createBaseLayer(layerDef: TileLayerDef): L.Layer {
   if (layerDef.type === 'vector') {
@@ -251,6 +252,7 @@ export default function MapPane() {
         <PartialEditLayer map={mapInstanceRef.current} />
       )}
       {mapInstanceRef.current && <PlaceSearch map={mapInstanceRef.current} />}
+      {mapInstanceRef.current && <LocateControl map={mapInstanceRef.current} />}
       {/* 右上のベースマップ切替（全画面幅で表示。モバイルではサイドバーが無いため唯一の切替手段） */}
       <BaseMapSwitcher />
     </div>
