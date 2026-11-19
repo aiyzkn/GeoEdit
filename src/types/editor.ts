@@ -27,6 +27,12 @@ export interface CreateLeg {
   gen: number
 }
 
+/** 下書きを確定したときの行き先（機能追加・UI改善設計書 B0） */
+export type DraftTarget =
+  | { kind: 'new' }
+  | { kind: 'append'; routeId: string; trackIndex: number; end: 'tail' | 'head' }
+  | { kind: 'replace'; routeId: string; trackIndex: number; startIndex: number; endIndex: number }
+
 /** 作成中の下書き。legs[i] は anchors[i] → anchors[i + 1] */
 export interface Draft {
   anchors: CreateAnchor[]
@@ -36,6 +42,7 @@ export interface Draft {
 export type EditMode =
   | 'none'
   | 'create'
+  | 'reroute'
   | 'partialEdit'
   | 'split'
   | 'deleteRange'

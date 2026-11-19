@@ -11,9 +11,10 @@ import { routeLeg, snapAnchor } from '@/lib/routingClient'
 import { resolveRoutingOptions } from '@/lib/routing/settings'
 import type { FallbackReason, LatLng } from '@/lib/routing'
 import {
-  addAnchor, bumpPending, insertAnchor, moveAnchor, newId, pendingLegs, removeAnchor, resetAutoLegs, setLegResult,
+  addAnchor, bumpPending, emptyDraft, insertAnchor, moveAnchor, newId, pendingLegs, removeAnchor, resetAutoLegs, setLegResult,
 } from '@/lib/editors/draft'
 import type { Draft, LegMode } from '@/types/editor'
+import { useRouteStore } from '@/stores/routeStore'
 
 const DRAG_THROTTLE_MS = 150
 
@@ -122,11 +123,48 @@ export function addAnchorAt(map: L.Map, at: LatLng, opts: { straight: boolean })
   clickQueue = clickQueue.then(async () => {
     const p = await correctPosition(map, at, routing, opts.straight)
     if (store().mode !== 'create') return
+    // 追記の下書きは、端の点に固定の通過点が 1 つある状態で始まる（B2）
     const prev = store().draft
     store().commitDraft(prev)
     store().setDraft(addAnchor(prev, { id: newId('a-'), lat: p.lat, lng: p.lng }, mode))
     requestPending()
   }).catch(() => {})
+}
+
+// ── 追記・道なり補正の開始（B1・B2。経路探索詳細設計書 §10.1） ───────────
+function trackPoints(routeId: string, trackIndex: number) {
+  return useRouteStore.getState().routes.find((r) => r.id === routeId)?.tracks[trackIndex]?.points
+}
+
+/** 既存のトラックの端から続きを描く。端の点に固定の通過点を 1 つ置く。履歴は空にする */
+export function startAppend(routeId: string, trackIndex: number, end: 'tail' | 'head'): boolean {
+  const pts = trackPoints(routeId, trackIndex)
+  if (!pts || pts.length === 0) return false
+  cancelAll()
+  const p = end === 'tail' ? pts[pts.length - 1] : pts[0]
+  const d = addAnchor(emptyDraft(), { id: newId('a-'), lat: p.lat, lng: p.lng, locked: true }, 'auto')
+  store().startDraft(d, { kind: 'append', routeId, trackIndex, end })
+  return true
+}
+
+/** 新しいルートを作る（追記をやめる）。下書きは空にする */
+export function startNew() {
+  cancelAll()
+  store().startDraft(emptyDraft(), { kind: 'new' })
+}
+
+/** 既存のトラックの 2 点の間を、道なりに引き直す。両端に固定の通過点を置き、間を 1 区間として頼む */
+export function startReplace(routeId: string, trackIndex: number, startIndex: number, endIndex: number): boolean {
+  const pts = trackPoints(routeId, trackIndex)
+  if (!pts || startIndex === endIndex || !pts[startIndex] || !pts[endIndex]) return false
+  cancelAll()
+  const a = pts[startIndex], b = pts[endIndex]
+  const mode: LegMode = store().routingSettings.enabled ? 'auto' : 'straight'
+  let d = addAnchor(emptyDraft(), { id: newId('a-'), lat: a.lat, lng: a.lng, locked: true }, mode)
+  d = addAnchor(d, { id: newId('a-'), lat: b.lat, lng: b.lng, locked: true }, mode)
+  store().startDraft(d, { kind: 'replace', routeId, trackIndex, startIndex, endIndex })
+  requestPending()
+  return true
 }
 
 // ── 通過点のドラッグ ──────────────────────────────────────────────────

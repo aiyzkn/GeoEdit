@@ -12,7 +12,7 @@ export default function ElevationChart() {
   const autoEle = useEditorStore((s) => s.createAutoElevation)
   const setDraftHoverIndex = useEditorStore((s) => s.setDraftHoverIndex)
   // 作成モードで下書きが 2 点以上あれば、選択中のトラックの代わりに下書きの断面を描く（B5）
-  const isDraft = mode === 'create' && autoEle && !!draftProfile && draftProfile.points.length >= 2
+  const isDraft = (mode === 'create' || mode === 'reroute') && autoEle && !!draftProfile && draftProfile.points.length >= 2
 
   const route = routes.find((r) => r.id === selectedRouteId)
   const track = route?.tracks[selectedTrackIndex]

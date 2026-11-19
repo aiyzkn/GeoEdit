@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
-import type { EditMode, UndoEntry, SelectionRange, Draft } from '@/types/editor'
+import type { EditMode, UndoEntry, SelectionRange, Draft, DraftTarget } from '@/types/editor'
 import type { RouteData, TrackPoint } from '@/types/route'
 import { emptyDraft } from '@/lib/editors/draft'
 import { ROUTING_SETTINGS_KEY, sanitizeSettings, type RoutingSettings } from '@/lib/routing/settings'
@@ -50,6 +50,8 @@ interface EditorState {
   isBusy: boolean
   /** 作成中の下書き（通過点と区間）と、その取り消し・やり直しの履歴 */
   draft: Draft
+  /** 下書きを確定したときの行き先（B0）。既定は新しいルート */
+  draftTarget: DraftTarget
   draftPast: Draft[]
   draftFuture: Draft[]
   /** 経路探索の設定（利用者ごと。localStorage に保存） */
@@ -81,6 +83,9 @@ interface EditorActions {
   setBusy: (busy: boolean) => void
   /** 下書きを差し替える（履歴に積まない。探索の結果・ドラッグ中） */
   setDraft: (d: Draft) => void
+  setDraftTarget: (t: DraftTarget) => void
+  /** 下書きと行き先と履歴を、まとめて差し替える（追記・道なり補正の開始） */
+  startDraft: (d: Draft, target: DraftTarget) => void
   /** prev を履歴に積み、やり直しの履歴を空にする（操作の確定ごと） */
   commitDraft: (prev: Draft) => void
   /** 1 つ前の下書きに戻し、それを返す（無ければ null） */
@@ -112,7 +117,7 @@ interface EditorActions {
  */
 export function confirmDiscardCreatePoints(): boolean {
   const { mode, draft } = useEditorStore.getState()
-  if (mode !== 'create' || draft.anchors.length === 0) return true
+  if ((mode !== 'create' && mode !== 'reroute') || draft.anchors.filter((a) => !a.locked).length === 0 && draft.legs.length === 0) return true
   return window.confirm(
     `作成中のルートには未確定のポイントが ${draft.anchors.length} 点あります。\n` +
       '確定せずに移動するとポイントは破棄されます。破棄してよろしいですか？'
@@ -127,6 +132,7 @@ export const useEditorStore = create<EditorState & EditorActions>()(
     selection: null,
     isBusy: false,
     draft: emptyDraft(),
+    draftTarget: { kind: 'new' },
     draftPast: [],
     draftFuture: [],
     routingSettings: loadRoutingSettings(),
@@ -142,11 +148,16 @@ export const useEditorStore = create<EditorState & EditorActions>()(
 
     setMode: (mode) =>
       set((state) => {
+        const prev = state.mode
         state.mode = mode
-        if (mode !== 'deleteRange') {
+        if (mode !== 'deleteRange' && mode !== 'reroute') {
           state.selection = null
         }
-        if (mode !== 'create') {
+        // 作成・道なり補正のモードを離れる（または、その間で切り替える）と、下書きを捨てる
+        if (mode !== prev) {
+          state.draftTarget = { kind: 'new' }
+        }
+        if (mode !== prev || (mode !== 'create' && mode !== 'reroute')) {
           state.draft = emptyDraft()
           state.draftPast = []
           state.draftFuture = []
@@ -233,6 +244,20 @@ export const useEditorStore = create<EditorState & EditorActions>()(
         state.draft = d
       }),
 
+    setDraftTarget: (t) =>
+      set((state) => {
+        state.draftTarget = t
+      }),
+
+    startDraft: (d, target) =>
+      set((state) => {
+        state.draft = d
+        state.draftTarget = target
+        state.draftPast = []
+        state.draftFuture = []
+        state.draftProfile = null
+      }),
+
     commitDraft: (prev) =>
       set((state) => {
         state.draftPast.push(prev)
@@ -267,6 +292,7 @@ export const useEditorStore = create<EditorState & EditorActions>()(
     clearDraft: () =>
       set((state) => {
         state.draft = emptyDraft()
+        state.draftTarget = { kind: 'new' }
         state.draftPast = []
         state.draftFuture = []
         state.routingProgress = null
