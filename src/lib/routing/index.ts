@@ -46,6 +46,11 @@ const MAINLINE_GAP_M = 800
 const MAINLINE_STRAIGHT_COS = 0.966
 /** 分離帯のある辺に挟まれた、分離帯の無い辺をまとめて車線合わせの区間に入れる長さの上限（m） */
 const LANE_BRIDGE_EDGE_M = 50
+/** 点の寄せで、地図画像の道を取る回廊の余白（寄せる距離に足す。m） */
+const SNAP_RASTER_MARGIN_M = 100
+/** 地図画像のみの長い区間: 粗い経路（z16）の上に中継点を置く間隔（m）と、粗い経路の始点・終点を探す距離（m） */
+const RASTER_CHUNK_M = 1500
+const RASTER_COARSE_SNAP_M = 1500
 /** マップマッチングで、軌跡のまわりに取るタイルの余白（候補の半径に足す。m） */
 const MATCH_TILE_MARGIN_M = 200
 /** マップマッチングで取るタイルの上限（z14。約 2.4 km 四方。これを超える長い軌跡は分けて頼む） */
@@ -88,12 +93,28 @@ export class Router {
 
   /** 置いた位置を、近くの道へ寄せる。道が無ければ null（例外は投げない） */
   async snap(at: LatLng, options: RoutingOptions, signal?: AbortSignal): Promise<LatLng | null> {
+    const source = options.source ?? 'vector'
+    const reachM = options.snap.radius + options.snap.bias
+    let g = this.graph
     try {
-      await this.ensureTiles(tilesAroundSegment(at, at, options.snap.radius + options.snap.bias), signal)
+      if (source !== 'raster') await this.ensureTiles(tilesAroundSegment(at, at, reachM), signal)
+      if (source !== 'vector') {
+        // 地図画像を使う設定では、地図画像の道へも寄せる（地図画像のみなら、ベクトルタイルは使わない。経路の元の選択設計書 §9.6）
+        const src = source === 'raster' ? this.rasterOutline : this.rasterRoads
+        const lines = src ? await src.lines(at, at, signal, reachM + SNAP_RASTER_MARGIN_M) : null
+        if (lines?.ok) {
+          const rg = new RoadGraph()
+          if (source === 'hybrid') for (const k of tilesAroundSegment(at, at, reachM)) { const t = this.cache.peek(k.x, k.y); if (t) rg.addTile(t) }
+          addRasterRoads(rg, lines.lines, source === 'hybrid', at.lat)
+          g = rg
+        } else if (source === 'raster') {
+          return null
+        }
+      }
     } catch {
       return null
     }
-    const pos = snapToGraph(this.graph, at.lat, at.lng, options.snap)
+    const pos = snapToGraph(g, at.lat, at.lng, options.snap)
     return pos ? { lat: round7(pos.lat), lng: round7(pos.lng) } : null
   }
 
@@ -127,15 +148,12 @@ export class Router {
    */
   private async routeLegWithRaster(from: LatLng, to: LatLng, options: RoutingOptions, source: 'hybrid' | 'raster', signal?: AbortSignal, onProgress?: Progress): Promise<RouteResult> {
     const hybrid = source === 'hybrid'
-    const vectorOnly = async (note: RasterNote): Promise<RouteResult> => hybrid
-      ? ({ ...(await this.routeLegVector(from, to, options, signal, onProgress)), raster: note })
-      : ({ ...fallback(from, to, 'no-route'), raster: note })
     if (planLeg(distanceLL(from, to)).kind === 'too-long') return fallback(from, to, 'too-long')
-    if (!this.rasterRoads || !this.rasterOutline) return vectorOnly('unavailable')
-    const linesP = hybrid
-      ? this.rasterRoads.lines(from, to, signal)
-      : this.rasterOutline.lines(from, to, signal).then((r) => (!r.ok && r.reason === 'too-large' ? this.rasterRoads!.lines(from, to, signal) : r))
-    const keys = hybrid ? await this.loadVectorTiles(from, to, options, signal, onProgress) : []
+    if (!hybrid) return this.routeLegRasterOnly(from, to, options, signal)
+    const vectorOnly = async (note: RasterNote): Promise<RouteResult> => ({ ...(await this.routeLegVector(from, to, options, signal, onProgress)), raster: note })
+    if (!this.rasterRoads) return vectorOnly('unavailable')
+    const linesP = this.rasterRoads.lines(from, to, signal)
+    const keys = await this.loadVectorTiles(from, to, options, signal, onProgress)
     const lines = await linesP
     if (signal?.aborted) return fallback(from, to, 'aborted')
     if (typeof keys === 'string') return fallback(from, to, keys)
@@ -147,15 +165,12 @@ export class Router {
       const t = this.cache.peek(k.x, k.y)
       if (t) g.addTile(t)
     }
-    addRasterRoads(g, lines.lines, hybrid, (from.lat + to.lat) / 2)
+    addRasterRoads(g, lines.lines, true, (from.lat + to.lat) / 2)
     const a = this.snapForRoute(g, from, options)
     const b = this.snapForRoute(g, to, options)
     const res = a && b ? search(g, a, b, options.params, () => signal?.aborted === true) : null
     if (signal?.aborted) return fallback(from, to, 'aborted')
-    if (!a || !b || !res) {
-      if (hybrid) return this.routeLegVector(from, to, options, signal, onProgress)
-      return fallback(from, to, !a || !b ? 'no-road' : 'no-route')
-    }
+    if (!a || !b || !res) return this.routeLegVector(from, to, options, signal, onProgress)
     const usesRaster = res.steps.some((st) => st.from !== st.to && g.edgeSrc[st.edge] > 0)
     if (!usesRaster) return this.finishLeg(g, from, to, a, b, res.steps, options, signal)
     if (hybrid) {
@@ -170,6 +185,115 @@ export class Router {
       }
     }
     return { ...(await this.finishLeg(g, from, to, a, b, res.steps, options, signal)), raster: 'used' }
+  }
+
+  /**
+   * 地図画像のみ（ベクトルタイルは使わない。経路の元の選択設計書 §9）。
+   * z17 の画像（色の付いた道＋輪郭から取り出した一般道）で探す。区間が長くて z17 では大きすぎるときは、
+   * z16 の色の付いた道で粗い経路を出し、それに沿って RASTER_CHUNK_M ごとに置いた点の間を z17 で探してつなぐ（§9.6）
+   */
+  private async routeLegRasterOnly(from: LatLng, to: LatLng, options: RoutingOptions, signal?: AbortSignal): Promise<RouteResult> {
+    if (!this.rasterRoads || !this.rasterOutline) return { ...fallback(from, to, 'no-route'), raster: 'unavailable' }
+    const fine = await this.rasterOutlineLeg(from, to, options, signal)
+    if (fine !== 'too-large') return fine
+    // 粗い経路（z16 の色の付いた道）。始点・終点が白い道の上でも、近くの色の付いた道から始める
+    const coarse = await this.rasterRoads.lines(from, to, signal)
+    if (signal?.aborted) return fallback(from, to, 'aborted')
+    if (!coarse.ok) return coarse.reason === 'aborted' ? fallback(from, to, 'aborted') : { ...fallback(from, to, 'tile-error'), raster: coarse.reason }
+    const cg = new RoadGraph()
+    addRasterRoads(cg, coarse.lines, false, (from.lat + to.lat) / 2)
+    const wide = { ...options.snap, radius: RASTER_COARSE_SNAP_M }
+    const ca = snapToGraph(cg, from.lat, from.lng, wide)
+    const cb = snapToGraph(cg, to.lat, to.lng, wide)
+    const cres = ca && cb ? search(cg, ca, cb, options.params, () => signal?.aborted === true) : null
+    if (signal?.aborted) return fallback(from, to, 'aborted')
+    if (!ca || !cb || !cres) return { ...fallback(from, to, !ca || !cb ? 'no-road' : 'no-route'), raster: 'used' }
+    // 粗い経路（頂点の間隔を 100 m 以下に補う。まっすぐな長い道は頂点が少ないため）
+    const path: LatLng[] = []
+    for (const p of rawPoints(cg, ca, cres.steps)) {
+      const prev = path[path.length - 1]
+      if (prev) {
+        const n = Math.ceil(distanceLL(prev, p) / 100)
+        for (let j = 1; j < n; j++) path.push({ lat: prev.lat + ((p.lat - prev.lat) * j) / n, lng: prev.lng + ((p.lng - prev.lng) * j) / n })
+      }
+      path.push(p)
+    }
+    // 粗い経路に沿って、RASTER_CHUNK_M ごとに中継点を置く（終点の手前 RASTER_CHUNK_M / 3 には置かない）
+    const total = pathDistance(path)
+    const marks: { at: LatLng; idx: number; mw?: boolean }[] = []
+    let acc = 0
+    let since = 0
+    for (let i = 1; i < path.length; i++) {
+      const d = distanceLL(path[i - 1], path[i])
+      acc += d
+      since += d
+      if (since >= RASTER_CHUNK_M && total - acc >= RASTER_CHUNK_M / 3) {
+        // 中継点は、粗い経路と同じ種類の道（高速か、それ以外か）へ寄せる。跨ぐ道の上に落ちても、そちらへ降りないため
+        const on = snapToGraph(cg, path[i].lat, path[i].lng, { ...options.snap, radius: 30 })
+        marks.push({ at: path[i], idx: i, mw: on ? cg.edgeCls[on.edge] >= 5 : undefined })
+        since = 0
+      }
+    }
+    const stops: { at: LatLng; idx: number; mw?: boolean }[] = [{ at: from, idx: 0 }, ...marks, { at: to, idx: path.length - 1 }]
+    const pts: LatLng[] = []
+    const push = (p: LatLng) => { const q = { lat: round7(p.lat), lng: round7(p.lng) }; if (!pts.length || !same(pts[pts.length - 1], q)) pts.push(q) }
+    for (let i = 1; i < stops.length; i++) {
+      const a = stops[i - 1], b = stops[i]
+      const r = await this.rasterOutlineLeg(a.at, b.at, options, signal, a.mw, b.mw)
+      if (signal?.aborted) return fallback(from, to, 'aborted')
+      if (r !== 'too-large' && r.status === 'ok') {
+        for (const p of r.points) push(p)
+      } else {
+        // z17 で引けない区間は、粗い経路の線で埋める
+        push(a.at)
+        for (let k = a.idx; k <= b.idx; k++) push(path[k])
+        push(b.at)
+      }
+    }
+    const last = { lat: to.lat, lng: to.lng }
+    if (!same(pts[pts.length - 1], last)) pts.push(last)
+    return { status: 'ok', points: pts, distance: pathDistance(pts), raster: 'used' }
+  }
+
+  /** z17 の画像だけで 1 区間を探す。z17 では大きすぎるときは 'too-large'。fromMw・toMw を渡すと、端を高速（true）・高速以外（false）へ寄せる */
+  private async rasterOutlineLeg(from: LatLng, to: LatLng, options: RoutingOptions, signal?: AbortSignal, fromMw?: boolean, toMw?: boolean): Promise<RouteResult | 'too-large'> {
+    const lines = await this.rasterOutline!.lines(from, to, signal)
+    if (signal?.aborted) return fallback(from, to, 'aborted')
+    if (!lines.ok) {
+      if (lines.reason === 'too-large') return 'too-large'
+      return lines.reason === 'aborted' ? fallback(from, to, 'aborted') : { ...fallback(from, to, 'tile-error'), raster: lines.reason }
+    }
+    const g = new RoadGraph()
+    addRasterRoads(g, lines.lines, false, (from.lat + to.lat) / 2)
+    const kindOf = (mw: boolean) => (c: number) => (c >= 5) === mw
+    const a = (fromMw === undefined ? null : snapToGraph(g, from.lat, from.lng, options.snap, kindOf(fromMw))) ?? this.snapForRoute(g, from, options)
+    const b = (toMw === undefined ? null : snapToGraph(g, to.lat, to.lng, options.snap, kindOf(toMw))) ?? this.snapForRoute(g, to, options)
+    if (!a || !b) return { ...fallback(from, to, 'no-road'), raster: 'used' }
+    let found = { a, b, res: search(g, a, b, options.params, () => signal?.aborted === true) }
+    if (!found.res && !signal?.aborted) {
+      // 高速の帯の際に置いた点は、帯の脇の一般道（側道・小道）へ寄ることがある。一般道からは高速へ乗れないので、
+      // 両端を「高速だけ」「高速以外だけ」へも寄せ直し、近い組み合わせから探し直す（§9.6）
+      const alts = (p: LatLng, first: GraphPos) => {
+        const out = [first]
+        for (const only of [(c: number) => c >= 5, (c: number) => c < 5]) {
+          const q = snapToGraph(g, p.lat, p.lng, options.snap, only)
+          if (q && !out.some((o) => o.edge === q.edge && Math.abs(o.t - q.t) < 1e-9)) out.push(q)
+        }
+        return out
+      }
+      const pairs: { a: GraphPos; b: GraphPos; d: number }[] = []
+      for (const pa of alts(from, a)) for (const pb of alts(to, b)) pairs.push({ a: pa, b: pb, d: distanceLL(from, pa) + distanceLL(to, pb) })
+      pairs.sort((x, y) => x.d - y.d)
+      for (const pr of pairs) {
+        if (pr.a === a && pr.b === b) continue
+        const res = search(g, pr.a, pr.b, options.params, () => signal?.aborted === true)
+        if (res) { found = { a: pr.a, b: pr.b, res }; break }
+        if (signal?.aborted) break
+      }
+    }
+    if (signal?.aborted) return fallback(from, to, 'aborted')
+    if (!found.res) return { ...fallback(from, to, 'no-route'), raster: 'used' }
+    return { ...(await this.finishLeg(g, from, to, found.a, found.b, found.res.steps, options, signal)), raster: 'used' }
   }
 
   /** 経路のベクトルタイル（z14）を取って、覚えているグラフに入れる。使ったタイルの番号か、失敗の理由を返す */

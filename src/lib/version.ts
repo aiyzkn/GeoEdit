@@ -1,6 +1,6 @@
 /** ページのタイトル・ヘッダー・バージョン情報・GPX の creator に出すアプリケーション名（1.2.0 で「GeoJSON / GPX / KML Editor」から変更） */
 export const APP_NAME = 'Route Editor'
-export const APP_VERSION = '1.4.0'
+export const APP_VERSION = '1.4.1'
 
 export interface ReleaseEntry {
   version: string
@@ -14,6 +14,15 @@ export interface ReleaseEntry {
  * セマンティックバージョニング: 互換性のない大規模更改.一般的な機能追加.バグフィックス
  */
 export const CHANGELOG: ReleaseEntry[] = [
+  {
+    version: '1.4.1',
+    date: '2026-11-26',
+    type: 'patch',
+    notes: [
+      '経路の元「地図画像のみ」で、置いた点を地図画像の道へ寄せるように（ベクトルタイルの道へ寄せていたため、開通したばかりの道の上の点がつながらないことがあった）',
+      '「地図画像のみ」の長い区間も、標準地図 z17 の道に沿って引くように（線のガタつきを解消）。画像を取得できないときは、その理由を知らせる',
+    ],
+  },
   {
     version: '1.4.0',
     date: '2026-11-26',

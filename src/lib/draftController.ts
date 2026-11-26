@@ -33,6 +33,13 @@ const RASTER_MESSAGES: Record<RasterNote, { level: 'info' | 'warning'; text: str
   'tile-error': { level: 'warning', text: '地図画像を取得できないため、ベクトルタイルだけで経路を引きました' },
 }
 
+/** 経路の元が「地図画像のみ」で、地図画像を使えずに直線で結んだときの知らせ（ベクトルタイルには戻さない。設計書 §9.6） */
+const RASTER_ONLY_FALLBACK: Record<Exclude<RasterNote, 'used'>, string> = {
+  unavailable: 'この環境では地図画像を読めないため、直線で結びました',
+  'too-large': '区間が長すぎて地図画像を使えないため、直線で結びました。途中に通過点を置いてください',
+  'tile-error': '地図画像を取得できないため、直線で結びました。少し待ってから「引き直す」を試してください',
+}
+
 const store = () => useEditorStore.getState()
 
 // ── 区間の探索 ────────────────────────────────────────────────────────
@@ -78,7 +85,8 @@ function requestLeg(legId: string) {
     if (result.status === 'fallback' && result.reason) {
       if (!toasted.has(key)) {
         toasted.add(key)
-        useUiStore.getState().addToast('warning', FALLBACK_MESSAGES[result.reason])
+        const rasterOnly = options.source === 'raster' && result.raster && result.raster !== 'used'
+        useUiStore.getState().addToast('warning', rasterOnly ? RASTER_ONLY_FALLBACK[result.raster as Exclude<RasterNote, 'used'>] : FALLBACK_MESSAGES[result.reason])
       }
     } else if (result.raster && !toasted.has(key)) {
       toasted.add(key)

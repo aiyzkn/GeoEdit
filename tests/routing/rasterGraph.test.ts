@@ -183,6 +183,56 @@ test('Router: raster で画像の高速の帯をたどる', async () => {
   for (const p of r.points) assert.ok(Math.abs(latLngToWorld(p.lat, p.lng)[0] - cx) < 4 * 4)
 })
 
+/** bandSource の帯に加え、帯の東（z16 で x = 137）に 1 本の灰色の線（帯とはつながらない小道）を描く */
+function bandWithPathSource() {
+  return async (z: number, x: number, y: number) => {
+    const t = await bandSource()(z, x, y)
+    const f = 2 ** (z - RASTER_ROAD_ZOOM)
+    for (let i = 0; i < 256; i++) {
+      if (Math.floor((x * 256 + i) / f) % 256 !== 137) continue
+      for (let j = 0; j < 256; j++) { const o = (j * 256 + i) * 4; t.data[o] = t.data[o + 1] = t.data[o + 2] = 0x64 }
+    }
+    return t
+  }
+}
+
+test('Router: raster の点の寄せは、地図画像の道へ寄せる（ベクトルタイルは読まない）', async () => {
+  let vectorCalls = 0
+  const vec = async () => { vectorCalls++; return null }
+  const router = new Router(vec, { coarseLoader: vec, raster: bandSource() })
+  const tx = TX * 4 + 1, ty = TY * 4 + 1
+  const o = resolveRoutingOptions({ ...DEFAULT_ROUTING_SETTINGS, source: 'raster' })
+  const p = await router.snap(z16(tx, 120, ty, 100), o)
+  assert.ok(p, '帯へ寄る')
+  assert.ok(Math.abs(latLngToWorld(p.lat, p.lng)[0] - (tx * 256 + 128) * 4) <= 2 * 4, '帯の中ほど')
+  assert.equal(vectorCalls, 0)
+  const vectorOnly = await new Router(vec, { coarseLoader: vec, raster: bandSource() }).snap(z16(tx, 120, ty, 100), resolveRoutingOptions(DEFAULT_ROUTING_SETTINGS))
+  assert.equal(vectorOnly, null, 'ベクトルのみの設定では、いままでどおりベクトルの道だけ')
+})
+
+test('Router: raster で、帯の脇の小道へ寄った点からつながらなければ、帯へ寄せ直して探す', async () => {
+  const router = new Router(async () => null, { coarseLoader: async () => null, raster: bandWithPathSource() })
+  const tx = TX * 4 + 1, ty = TY * 4 + 1
+  const from = z16(tx, 135.5, ty, 60), to = z16(tx, 128, ty + 1, 200)
+  const r = await router.routeLeg(from, to, resolveRoutingOptions({ ...DEFAULT_ROUTING_SETTINGS, source: 'raster', laneMatch: false }))
+  assert.equal(r.status, 'ok', r.reason)
+  const cx = (tx * 256 + 128) * 4
+  for (const p of r.points.slice(1, -1)) assert.ok(Math.abs(latLngToWorld(p.lat, p.lng)[0] - cx) <= 3 * 4, '帯の上を通る')
+})
+
+test('Router: raster の長い区間（z17 では大きすぎる）は、z16 の粗い経路に沿って z17 で区切って探す', async () => {
+  const calls: string[] = []
+  const router = new Router(async () => null, { coarseLoader: async () => null, raster: bandSource(calls) })
+  const tx = TX * 4 + 1, ty = TY * 4 + 1
+  const from = z16(tx, 128, ty, 10), to = z16(tx, 128, ty + 26, 10) // 約 16 km
+  const r = await router.routeLeg(from, to, resolveRoutingOptions({ ...DEFAULT_ROUTING_SETTINGS, source: 'raster', laneMatch: false }))
+  assert.equal(r.status, 'ok', r.reason)
+  assert.equal(r.raster, 'used')
+  assert.ok(calls.some((c) => c.startsWith('16/')) && calls.some((c) => c.startsWith('17/')), 'z16 と z17 の両方を使う')
+  const cx = (tx * 256 + 128) * 4
+  for (const p of r.points) assert.ok(Math.abs(latLngToWorld(p.lat, p.lng)[0] - cx) <= 3 * 4, '帯の上を通る')
+})
+
 test('Router: raster は、白い一般道を輪郭から取り出してたどる（ベクトルタイルは読まない）', async () => {
   let vectorCalls = 0
   const vec = async () => { vectorCalls++; return null }

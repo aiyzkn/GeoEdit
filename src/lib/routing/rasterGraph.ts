@@ -109,12 +109,13 @@ export class RasterRoadSource {
     return out
   }
 
-  async lines(from: LatLng, to: LatLng, signal?: AbortSignal): Promise<RasterLinesResult> {
+  /** corridor を渡すと、回廊の幅（両側。m）をそれにする（点の寄せでは狭く取る） */
+  async lines(from: LatLng, to: LatLng, signal?: AbortSignal, corridor?: number): Promise<RasterLinesResult> {
     const outline = this.opts.outline === true
     const upp = unitsPerPx(this.zoom)
-    const corridorM = outline
+    const corridorM = corridor ?? (outline
       ? Math.min(RASTER_OUTLINE.corridorMaxM, Math.max(RASTER_OUTLINE.corridorMinM, RASTER_OUTLINE.corridorRatio * distanceM(from, to)))
-      : RASTER_ROADS.corridorM
+      : RASTER_ROADS.corridorM)
     const keys = RasterRoadSource.corridorTiles(from, to, corridorM, this.zoom)
     if (keys.length > (outline ? RASTER_OUTLINE.maxTiles : RASTER_ROADS.maxTiles)) return { ok: false, reason: 'too-large' }
     let tx0 = Infinity, ty0 = Infinity, tx1 = -Infinity, ty1 = -Infinity
