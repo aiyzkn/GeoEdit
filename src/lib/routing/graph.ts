@@ -6,6 +6,8 @@ import type { LatLng, RoadTile } from './types.ts'
 const KEY_MUL = 2 ** 26
 const CELL = 256 // 空間索引のマス（格子。z14 で約 120 m）
 const CELL_MUL = 2 ** 20
+/** 使わなくした辺の階級（探索・寄せの maxClass を必ず超える。経路の元の選択設計書 §3.2 の辺の分割） */
+export const DISABLED_CLASS = 99
 
 /** 一方通行の推定と、高速道路での曲がり方の値（§14） */
 export const ONEWAY = {
@@ -47,6 +49,8 @@ export class RoadGraph {
   edgeStruct: number[] = []
   /** 1 = 分離帯あり */
   edgeMed: number[] = []
+  /** 0 = ベクトルタイル / 1 = 地図画像から足した辺 / 2 = 地図画像の道の端を道へつなぐ短い線（経路の元の選択設計書 §3.2） */
+  edgeSrc: number[] = []
   edgeTile: number[] = []
   /** 形: tiles[edgeTile].coords の点の番号 edgeFrom 〜 edgeTo（両端を含む） */
   edgeFrom: number[] = []
@@ -160,6 +164,7 @@ export class RoadGraph {
     this.edgeLv.push(tile.lv[line])
     this.edgeStruct.push(tile.struct[line])
     this.edgeMed.push(tile.med[line])
+    this.edgeSrc.push(tile.src?.[line] ?? 0)
     this.edgeTile.push(ti)
     this.edgeFrom.push(from)
     this.edgeTo.push(to)
@@ -178,6 +183,11 @@ export class RoadGraph {
         }
       }
     }
+  }
+
+  /** 辺を探索・寄せに使わなくする（分けた辺で置き換えたとき。経路の元の選択設計書 §3.2） */
+  disableEdge(e: number): void {
+    this.edgeCls[e] = DISABLED_CLASS
   }
 
   /** 辺の形（世界座標。a → b の向き）の点の数 */
@@ -352,6 +362,16 @@ export class RoadGraph {
    *   （右側に出入口がある所もあるので、禁止にはしない）
    */
   turnCost(e1: number, dir1: number, e2: number, dir2: number): number {
+    // 地図画像から足した辺には、分離帯・ランプの属性が無い。高速どうしの折り返しの禁止だけを見る（経路の元の選択設計書 §3.2）
+    if (this.edgeSrc[e1] > 0 || this.edgeSrc[e2] > 0) {
+      // つなぐ線は、画像の道の端が道を少し越えた所から引くので、向きを見ない
+      if (this.edgeSrc[e1] === 2 || this.edgeSrc[e2] === 2) return 0
+      if (this.edgeCls[e1] !== 6 || this.edgeCls[e2] !== 6) return 0
+      if (e1 === e2) return Infinity
+      const [ax, ay] = this.heading(e1, dir1, 'out')
+      const [bx, by] = this.heading(e2, dir2, 'in')
+      return ax * bx + ay * by < ONEWAY.maxTurnCos ? Infinity : 0
+    }
     if (this.edgeCls[e1] === 6 && this.edgeCls[e2] === 6) {
       if (e1 === e2) return Infinity
       const [ax, ay] = this.heading(e1, dir1, 'out')

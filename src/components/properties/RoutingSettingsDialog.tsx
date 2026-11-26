@@ -2,6 +2,7 @@ import { useState } from 'react'
 import Modal from '@/components/common/Modal'
 import { useEditorStore } from '@/stores/editorStore'
 import { DEFAULT_ROUTING_SETTINGS, LIMITS, presetParams, type ClassWeights, type PriorityPreset } from '@/lib/routing/settings'
+import type { RouteSource } from '@/lib/routing/types'
 
 interface Props {
   onClose: (changed: boolean) => void
@@ -16,6 +17,13 @@ const PRESETS: { value: PriorityPreset; label: string; desc: string }[] = [
 ]
 
 const CLASS_LABELS = ['里道', '市区町村道', '県道', '国道', '有料道路', '高速道路']
+
+/** 経路の元（designs/経路の元の選択設計書.md §3.1・§5） */
+const SOURCES: { value: RouteSource; label: string; desc: string }[] = [
+  { value: 'vector', label: 'ベクトルタイルのみ', desc: '地理院のベクトルタイルの道路中心線で探す（いままでの方式）' },
+  { value: 'hybrid', label: '地図画像＋ベクトルタイル', desc: '開通したばかりでベクトルタイルに無い道を、地図画像から足して探す。ベクトルタイルだけの経路と似ていれば、そちらに寄せる' },
+  { value: 'raster', label: '地図画像のみ（試験的）', desc: '地図画像の色の付いた道（高速・国道・県道）だけで探す。白い一般道は使えない' },
+]
 
 /** 数値の入力欄。入力を確定したとき（blur・Enter）に範囲へ丸めて保存する */
 function NumberField({ label, value, min, max, step, unit, onCommit }: {
@@ -80,6 +88,19 @@ export default function RoutingSettingsDialog({ onClose }: Props) {
       footer="設定はこのブラウザに保存されます。変えた設定は、これから引く区間に使われます（引いた区間は「引き直す」で反映）。"
     >
       <div className="space-y-4">
+        <fieldset className="space-y-1">
+          <legend className="font-semibold mb-1">経路の元</legend>
+          {SOURCES.map((o) => (
+            <label key={o.value} className="flex items-start gap-2">
+              <input type="radio" name="routing-source" checked={settings.source === o.value} onChange={() => setRoutingSettings({ source: o.value })} className="mt-0.5" />
+              <span><span className="font-medium">{o.label}</span><span className="text-[var(--color-muted)]"> — {o.desc}</span></span>
+            </label>
+          ))}
+          {settings.source !== 'vector' && (
+            <div className="ml-5 text-[var(--color-muted)]">表示中の背景地図に関係なく、標準地図の画像（ズーム 16）を、区間のまわり（両側 1.2 km）だけ取得します。区間が長い（目安 10 km 超の斜めの区間）と、ベクトルタイルだけで探します</div>
+          )}
+        </fieldset>
+
         <fieldset className="space-y-1">
           <legend className="font-semibold mb-1">使う道路</legend>
           <label className="flex items-center gap-2">

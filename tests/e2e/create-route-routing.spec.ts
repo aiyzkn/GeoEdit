@@ -155,6 +155,25 @@ test.describe('道路タイルあり', () => {
     await page.getByRole('dialog').getByRole('button', { name: '既定に戻す' }).click()
     await expect(page.getByRole('dialog').getByRole('radio', { name: /標準/ })).toBeChecked()
   })
+
+  test('経路の元を「地図画像＋ベクトルタイル」にすると、再読み込みしても残る。「既定に戻す」でベクトルタイルのみ', async ({ page }) => {
+    await zoomIn(page, 1)
+    await selectMode(page, '作成')
+    await page.getByRole('button', { name: '経路探索の設定' }).click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog.getByRole('radio', { name: /ベクトルタイルのみ/ })).toBeChecked()
+    await expect(dialog.getByText(/区間のまわり（両側 1.2 km）/)).toHaveCount(0)
+    await dialog.getByRole('radio', { name: /地図画像＋ベクトルタイル/ }).check()
+    await expect(dialog.getByText(/区間のまわり（両側 1.2 km）/)).toBeVisible()
+    if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT })
+    await dialog.getByRole('button', { name: '閉じる', exact: true }).click()
+    await page.reload()
+    await selectMode(page, '作成')
+    await page.getByRole('button', { name: '経路探索の設定' }).click()
+    await expect(page.getByRole('dialog').getByRole('radio', { name: /地図画像＋ベクトルタイル/ })).toBeChecked()
+    await page.getByRole('dialog').getByRole('button', { name: '既定に戻す' }).click()
+    await expect(page.getByRole('dialog').getByRole('radio', { name: /ベクトルタイルのみ/ })).toBeChecked()
+  })
 })
 
 test.describe('道路タイルなし', () => {

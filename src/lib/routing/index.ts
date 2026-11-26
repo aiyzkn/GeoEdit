@@ -7,12 +7,13 @@ import { RoadGraph } from './graph.ts'
 import { fetchCoarseRoadTileBytes, fetchRoadTileBytes, isAbortError, RoadTileCache } from './roadTiles.ts'
 import { LaneMatcher, type RasterSource } from './lane.ts'
 import { browserStdRaster } from './raster.ts'
+import { addRasterRoads, RasterRoadSource, similarPaths } from './rasterGraph.ts'
 import { search } from './search.ts'
 import { snapToGraph } from './snap.ts'
 import { DEFAULT_MATCH_PARAMS, matchTrack as matchTrackOnGraph, type MatchParams } from './match.ts'
-import type { FallbackReason, GraphPos, LatLng, RouteResult, RoutingOptions, SearchStep, TileBytesLoader } from './types.ts'
+import type { FallbackReason, GraphPos, LatLng, RasterNote, RouteResult, RoutingOptions, SearchStep, TileBytesLoader } from './types.ts'
 
-export type { FallbackReason, LatLng, RoadClass, RouteResult, RoutingOptions } from './types.ts'
+export type { FallbackReason, LatLng, RasterNote, RoadClass, RouteResult, RouteSource, RoutingOptions } from './types.ts'
 export { DEFAULT_MATCH_PARAMS, type MatchParams } from './match.ts'
 
 /** トラックのマップマッチングの結果の区間。input は入力の点の番号の範囲（両端を含む） */
@@ -67,6 +68,8 @@ export class Router {
   private readonly coarseGraphs = new Map<string, CoarseGraph>()
   private graph = new RoadGraph()
   private readonly lane: LaneMatcher | null
+  /** 地図画像の道（経路の元が hybrid・raster のとき。経路の元の選択設計書 §3） */
+  private readonly rasterRoads: RasterRoadSource | null
 
   constructor(
     loader: TileBytesLoader = fetchRoadTileBytes,
@@ -75,6 +78,7 @@ export class Router {
     // 画像の車線に合わせる処理（§13）。raster を省略したら、ブラウザなら標準地図を取る。Node では使わない
     const raster = opts.raster === undefined ? browserStdRaster() : opts.raster
     this.lane = raster ? new LaneMatcher(raster) : null
+    this.rasterRoads = raster ? new RasterRoadSource(raster) : null
     this.cache = new RoadTileCache(loader, { max: opts.cacheTiles, concurrency: opts.concurrency })
     this.coarseCache = new RoadTileCache(opts.coarseLoader ?? fetchCoarseRoadTileBytes, { max: 400, concurrency: opts.concurrency })
   }
@@ -92,9 +96,80 @@ export class Router {
 
   /** 2 点の間を探索する。失敗しても throw せず、直線の fallback を返す */
   async routeLeg(from: LatLng, to: LatLng, options: RoutingOptions, signal?: AbortSignal, onProgress?: Progress): Promise<RouteResult> {
+    const source = options.source ?? 'vector'
+    if (source !== 'vector') return this.routeLegWithRaster(from, to, options, source, signal, onProgress)
+    return this.routeLegVector(from, to, options, signal, onProgress)
+  }
+
+  /** ベクトルタイルだけで探す（いままでの方式） */
+  private async routeLegVector(from: LatLng, to: LatLng, options: RoutingOptions, signal?: AbortSignal, onProgress?: Progress): Promise<RouteResult> {
+    const keys = await this.loadVectorTiles(from, to, options, signal, onProgress)
+    if (typeof keys === 'string') return fallback(from, to, keys)
+    const g = this.graph
+    const a = this.snapForRoute(g, from, options)
+    const b = this.snapForRoute(g, to, options)
+    if (!a || !b) return fallback(from, to, 'no-road')
+    const res = search(g, a, b, options.params, () => signal?.aborted === true)
+    if (signal?.aborted) return fallback(from, to, 'aborted')
+    if (!res) return fallback(from, to, 'no-route')
+    return this.finishLeg(g, from, to, a, b, res.steps, options, signal)
+  }
+
+  /**
+   * 地図画像の道を使って探す（経路の元の選択設計書 §3.1・§3.2）。
+   * hybrid: ベクトルのグラフに、ベクトルに無い画像の道を足して探す。画像の道を通った経路が、ベクトルだけの経路と似ていれば、ベクトルの経路を使う。
+   * raster: 画像の色の付いた道だけで探す（試験的）。
+   * 画像を使えないとき（読めない環境・大きすぎる・取得の失敗）は、ベクトルだけで探し、raster に理由を入れる
+   */
+  private async routeLegWithRaster(from: LatLng, to: LatLng, options: RoutingOptions, source: 'hybrid' | 'raster', signal?: AbortSignal, onProgress?: Progress): Promise<RouteResult> {
+    const vectorOnly = async (note: RasterNote): Promise<RouteResult> => ({ ...(await this.routeLegVector(from, to, options, signal, onProgress)), raster: note })
+    if (planLeg(distanceLL(from, to)).kind === 'too-long') return fallback(from, to, 'too-long')
+    if (!this.rasterRoads) return vectorOnly('unavailable')
+    const hybrid = source === 'hybrid'
+    const linesP = this.rasterRoads.lines(from, to, signal)
+    const keys = hybrid ? await this.loadVectorTiles(from, to, options, signal, onProgress) : []
+    const lines = await linesP
+    if (signal?.aborted) return fallback(from, to, 'aborted')
+    if (typeof keys === 'string') return fallback(from, to, keys)
+    if (!lines.ok) return lines.reason === 'aborted' ? fallback(from, to, 'aborted') : vectorOnly(lines.reason)
+
+    // この区間だけのグラフ（辺を分けるので、覚えているベクトルのグラフとは別に作る）
+    const g = new RoadGraph()
+    for (const k of keys) {
+      const t = this.cache.peek(k.x, k.y)
+      if (t) g.addTile(t)
+    }
+    addRasterRoads(g, lines.lines, hybrid, (from.lat + to.lat) / 2)
+    const a = this.snapForRoute(g, from, options)
+    const b = this.snapForRoute(g, to, options)
+    const res = a && b ? search(g, a, b, options.params, () => signal?.aborted === true) : null
+    if (signal?.aborted) return fallback(from, to, 'aborted')
+    if (!a || !b || !res) {
+      if (hybrid) return this.routeLegVector(from, to, options, signal, onProgress)
+      return fallback(from, to, !a || !b ? 'no-road' : 'no-route')
+    }
+    const usesRaster = res.steps.some((st) => st.from !== st.to && g.edgeSrc[st.edge] > 0)
+    if (!usesRaster) return this.finishLeg(g, from, to, a, b, res.steps, options, signal)
+    if (hybrid) {
+      // 画像の道を通った。ベクトルだけの経路と似ていれば、ベクトルの経路（形がよい）を使う（§3.1）
+      const vg = this.graph
+      const va = this.snapForRoute(vg, from, options)
+      const vb = this.snapForRoute(vg, to, options)
+      const vres = va && vb ? search(vg, va, vb, options.params, () => signal?.aborted === true) : null
+      if (signal?.aborted) return fallback(from, to, 'aborted')
+      if (va && vb && vres && similarPaths(rawPoints(g, a, res.steps), rawPoints(vg, va, vres.steps))) {
+        return this.finishLeg(vg, from, to, va, vb, vres.steps, options, signal)
+      }
+    }
+    return { ...(await this.finishLeg(g, from, to, a, b, res.steps, options, signal)), raster: 'used' }
+  }
+
+  /** 経路のベクトルタイル（z14）を取って、覚えているグラフに入れる。使ったタイルの番号か、失敗の理由を返す */
+  private async loadVectorTiles(from: LatLng, to: LatLng, options: RoutingOptions, signal?: AbortSignal, onProgress?: Progress): Promise<TileKey[] | FallbackReason> {
     const d = distanceLL(from, to)
     const plan = planLeg(d)
-    if (plan.kind === 'too-long') return fallback(from, to, 'too-long')
+    if (plan.kind === 'too-long') return 'too-long'
+    let keys: TileKey[]
     try {
       let tiles: TileKey[] | null
       if (plan.kind === 'direct') {
@@ -103,34 +178,30 @@ export class Router {
         // 2 段階（§6.2）: 粗い経路のまわりの回廊。見つからなければ、短い区間は 1 段階でやり直す
         tiles = await this.corridorTiles(from, to, d, options, signal)
         if (!tiles) {
-          if (d > CORRIDOR.retryDirectMaxKm * 1000) return fallback(from, to, signal?.aborted ? 'aborted' : 'no-route')
+          if (d > CORRIDOR.retryDirectMaxKm * 1000) return signal?.aborted ? 'aborted' : 'no-route'
           tiles = tilesAroundSegment(from, to, directRadius(d))
         }
       }
       // 点のまわりも（道まで遠いときの接続のため）
       for (const p of [from, to]) for (const t of tilesAroundSegment(p, p, CORRIDOR.pointRadiusM)) tiles.push(t)
-      await this.ensureTiles(dedupeTiles(tiles), signal, onProgress)
+      keys = dedupeTiles(tiles)
+      await this.ensureTiles(keys, signal, onProgress)
     } catch (e) {
-      return fallback(from, to, isAbortError(e) || signal?.aborted ? 'aborted' : 'tile-error')
+      return isAbortError(e) || signal?.aborted ? 'aborted' : 'tile-error'
     }
-    if (signal?.aborted) return fallback(from, to, 'aborted')
+    if (signal?.aborted) return 'aborted'
+    return keys
+  }
 
-    const g = this.graph
-    const a = this.snapForRoute(from, options)
-    const b = this.snapForRoute(to, options)
-    if (!a || !b) return fallback(from, to, 'no-road')
-
-    const res = search(g, a, b, options.params, () => signal?.aborted === true)
-    if (signal?.aborted) return fallback(from, to, 'aborted')
-    if (!res) return fallback(from, to, 'no-route')
-
+  /** 探索の結果を、両端を入力の位置にした点の列にする */
+  private async finishLeg(g: RoadGraph, from: LatLng, to: LatLng, a: GraphPos, b: GraphPos, steps: SearchStep[], options: RoutingOptions, signal?: AbortSignal): Promise<RouteResult> {
     const pts: LatLng[] = [{ lat: from.lat, lng: from.lng }]
     const push = (p: LatLng) => {
       const q = { lat: round7(p.lat), lng: round7(p.lng) }
       if (!same(pts[pts.length - 1], q)) pts.push(q)
     }
     push(a)
-    for (const p of await this.stepsToPoints(a, res.steps, options, signal)) push(p)
+    for (const p of await this.stepsToPoints(g, a, steps, options, signal)) push(p)
     if (signal?.aborted) return fallback(from, to, 'aborted')
     push(b)
     const last = { lat: to.lat, lng: to.lng }
@@ -166,7 +237,7 @@ export class Router {
         continue
       }
       const pts: LatLng[] = [{ lat: round7(s.start.lat), lng: round7(s.start.lng) }]
-      for (const p of await this.stepsToPoints(s.start, s.steps, options, signal)) {
+      for (const p of await this.stepsToPoints(this.graph, s.start, s.steps, options, signal)) {
         const q = { lat: round7(p.lat), lng: round7(p.lng) }
         if (!same(pts[pts.length - 1], q)) pts.push(q)
       }
@@ -183,8 +254,7 @@ export class Router {
    * 探索・マップマッチングの結果の辺の並びを、点の列にする（start から始まる。start と同じ点が先頭に入る。重なりは呼び出し側で除く）。
    * 分離帯のある一般道・高速の本線は、地図画像の車線に合わせる（§13・§14.5）
    */
-  private async stepsToPoints(start: LatLng, allSteps: SearchStep[], options: RoutingOptions, signal?: AbortSignal): Promise<LatLng[]> {
-    const g = this.graph
+  private async stepsToPoints(g: RoadGraph, start: LatLng, allSteps: SearchStep[], options: RoutingOptions, signal?: AbortSignal): Promise<LatLng[]> {
     // 辺ごとの点列を、種類ごとの区間にまとめる。
     //   div = 分離帯のある一般道（1 本の線）: 地図画像の車線に合わせる（§13）
     //   mw = 高速道路の本線（上下線を兼ねる 1 本の線）: 進む向きの左側の車道の中心へ（§14.5）
@@ -196,6 +266,7 @@ export class Router {
     const useLane = options.lane === true && this.lane !== null
     const kinds: Kind[] = steps.map((st) => {
       const e = st.edge
+      if (g.edgeSrc[e] > 0) return 'plain' // 地図画像から足した辺（z17 への寄せ直しは、経路の元の選択設計書 §4.3。別の PR）
       const single = g.edgeMed[e] === 1 && g.oneway(e) === 0
       if (g.edgeCls[e] === 6) return g.edgeMed[e] !== 1 ? 'ramp' : single && useLane ? 'mw' : 'plain'
       return single && useLane ? 'div' : 'plain'
@@ -308,9 +379,9 @@ export class Router {
   }
 
   /** snap.radius 以内の道へ。無ければ 300 m 以内の道へ（その間は直線で結ぶ）。それも無ければ null */
-  private snapForRoute(p: LatLng, options: RoutingOptions): GraphPos | null {
-    return snapToGraph(this.graph, p.lat, p.lng, options.snap)
-      ?? snapToGraph(this.graph, p.lat, p.lng, { ...options.snap, radius: Math.max(CONNECT_RADIUS_M, options.snap.radius) })
+  private snapForRoute(g: RoadGraph, p: LatLng, options: RoutingOptions): GraphPos | null {
+    return snapToGraph(g, p.lat, p.lng, options.snap)
+      ?? snapToGraph(g, p.lat, p.lng, { ...options.snap, radius: Math.max(CONNECT_RADIUS_M, options.snap.radius) })
   }
 
   private async ensureTiles(keys: { x: number; y: number }[], signal?: AbortSignal, onProgress?: Progress) {
@@ -371,6 +442,16 @@ function trimRamp(ramp: LatLng[], node: LatLng, inner: LatLng, shifted: LatLng, 
   while (k < order.length - 1 && dist(order[k]) < 600 && lateral(order[k]) < d + 2) k++
   const kept = order.slice(k)
   return rampIsBefore ? kept.reverse() : kept
+}
+
+/** 探索の結果の辺の形をそのままつないだ線（車線合わせなし。似ているかの比べ用） */
+function rawPoints(g: RoadGraph, start: GraphPos, steps: SearchStep[]): LatLng[] {
+  const out: LatLng[] = [{ lat: start.lat, lng: start.lng }]
+  for (const st of steps) {
+    if (st.from === st.to) continue
+    for (const p of g.subShape(st.edge, st.from, st.to)) if (!same(out[out.length - 1], p)) out.push(p)
+  }
+  return out
 }
 
 function dedupeTiles(keys: TileKey[]): TileKey[] {

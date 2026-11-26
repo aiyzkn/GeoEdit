@@ -23,6 +23,8 @@ export interface RoadTile {
   struct: Uint8Array
   /** [count] 1 = 分離帯あり（medSect > 0）。分離帯のある道路だけ、地図画像の車線に合わせる（§13） */
   med: Uint8Array
+  /** [count] 1 = 地図画像から作った線、2 = その端を道へつなぐ線（経路の元の選択設計書 §3.2）。省略は全部 0（ベクトルタイル） */
+  src?: Uint8Array
   /** [count + 1] coords の中の開始位置（点の番号） */
   start: Uint32Array
   /** [点の数 × 2] 世界座標（z14 のタイル番号 × 4096 + タイル内の座標）。x, y の順 */
@@ -55,7 +57,19 @@ export interface RoutingOptions {
   snap: SnapParams
   /** 分離帯のある道路の線を、地図画像の車線に合わせる（§13）。省略は false */
   lane?: boolean
+  /** 経路の元（経路の元の選択設計書 §3.1）。省略は 'vector' */
+  source?: RouteSource
 }
+
+/** vector = ベクトルタイルのみ / hybrid = 地図画像＋ベクトルタイル / raster = 地図画像のみ（試験的） */
+export type RouteSource = 'vector' | 'hybrid' | 'raster'
+
+/**
+ * 地図画像を使ったか（経路の元が vector 以外のとき）。
+ * used = 地図画像の道を通った / unavailable = 地図画像を読めない環境 / too-large = 区間が長く画像が大きすぎる / tile-error = 画像を取得できない。
+ * unavailable・too-large・tile-error のときは、ベクトルタイルだけで探した
+ */
+export type RasterNote = 'used' | 'unavailable' | 'too-large' | 'tile-error'
 
 /** 辺の上の位置。t は辺の a 端からの道のりの割合（0〜1） */
 export interface GraphPos {
@@ -88,4 +102,5 @@ export interface RouteResult {
   points: LatLng[]
   distance: number
   reason?: FallbackReason
+  raster?: RasterNote
 }
