@@ -258,18 +258,30 @@ export class Router {
     // 辺ごとの点列を、種類ごとの区間にまとめる。
     //   div = 分離帯のある一般道（1 本の線）: 地図画像の車線に合わせる（§13）
     //   mw = 高速道路の本線（上下線を兼ねる 1 本の線）: 進む向きの左側の車道の中心へ（§14.5）
+    //   green = 緑の道（高速・有料。上下線を兼ねる 1 本の線と、地図画像から足した辺）: 分離帯の描画によらず、
+    //           z16・z17 の画像の緑の帯で上下線に分ける（経路の元の選択設計書 §4.4。利用者の指示 2026-11-26）
     //   ramp = 高速道路のランプ、plain = そのほか: そのまま
-    // 上下線が別々の線になっている道路（一方通行と推定できた辺）は、線がすでに車道ごとにあるので合わせない
-    type Kind = 'div' | 'mw' | 'ramp' | 'plain'
+    // 上下線が別々の線になっている道路（一方通行と推定できた辺）は、線がすでに車道ごとにあるので合わせない。
+    // 画像のズームの上限（rasterMaxZoom）: 18 = 高速の本線（分離帯あり）は z18 の車線、ほかの緑の道は z17 /
+    //   17（既定）= 緑の道はすべて z17、分離帯のある一般道は z18 を併用 / 16 = 緑の道は z16、一般道は合わせない
+    type Kind = 'div' | 'mw' | 'green' | 'ramp' | 'plain'
     const steps = allSteps.filter((st) => st.from !== st.to)
     const lenOf = (st: (typeof steps)[number]) => Math.abs(st.to - st.from) * g.edgeLen[st.edge]
     const useLane = options.lane === true && this.lane !== null
+    const maxZoom = options.rasterMaxZoom ?? 17
+    const greenZoom = Math.min(17, maxZoom)
     const kinds: Kind[] = steps.map((st) => {
       const e = st.edge
-      if (g.edgeSrc[e] > 0) return 'plain' // 地図画像から足した辺（z17 への寄せ直しは、経路の元の選択設計書 §4.3。別の PR）
-      const single = g.edgeMed[e] === 1 && g.oneway(e) === 0
-      if (g.edgeCls[e] === 6) return g.edgeMed[e] !== 1 ? 'ramp' : single && useLane ? 'mw' : 'plain'
-      return single && useLane ? 'div' : 'plain'
+      if (g.edgeSrc[e] > 0) return useLane ? 'green' : 'plain' // 地図画像から足した辺は、色で取り出した緑の道（z16 の骨格を帯の上へ寄せ直す）
+      const cls = g.edgeCls[e]
+      const twoWay = g.oneway(e) === 0
+      const single = g.edgeMed[e] === 1 && twoWay
+      if (cls === 6 || cls === 5) {
+        if (!useLane) return cls === 6 && g.edgeMed[e] !== 1 ? 'ramp' : 'plain'
+        if (cls === 6 && single && maxZoom >= 18) return 'mw'
+        return twoWay ? 'green' : 'plain'
+      }
+      return single && useLane && maxZoom >= 17 ? 'div' : 'plain'
     })
     // 分離帯のある辺に挟まれた短い辺（交差点の中など。属性が分離帯なしになっている）も、同じ区間に入れる
     for (let i = 0; i < steps.length; i++) {
@@ -283,9 +295,10 @@ export class Router {
     // （関越道の池田の橋の付近 245 m が、属性では分離帯なしになっている）
     if (useLane) {
       for (let i = 0; i < steps.length; i++) {
-        if (kinds[i] !== 'ramp') continue
+        const rampLike = (k: Kind) => k === 'ramp' || (k === 'green' && maxZoom >= 18)
+        if (!rampLike(kinds[i])) continue
         let j = i, len = 0
-        while (j < steps.length && kinds[j] === 'ramp') { len += lenOf(steps[j]); j++ }
+        while (j < steps.length && rampLike(kinds[j])) { len += lenOf(steps[j]); j++ }
         if (i > 0 && j < steps.length && kinds[i - 1] === 'mw' && kinds[j] === 'mw' && len <= MAINLINE_GAP_M) {
           let straight = true
           for (let k = i; k <= j && straight; k++) {
@@ -313,13 +326,16 @@ export class Router {
       if (seg.pts.length < 2) continue
       if (seg.kind === 'div') {
         seg.pts = await this.lane.correct(seg.pts, signal)
+      } else if (seg.kind === 'green') {
+        seg.pts = await this.lane.correct(seg.pts, signal, { greenZoom })
       } else if (seg.kind === 'mw') {
         // 左へ分かれる・左から合流するランプとの間は、車線に寄せたままつなぐ（中央へ戻さない）
         const prev = segs[i - 1], next = segs[i + 1]
         const n = seg.pts.length
         const node0 = seg.pts[0], node1 = seg.pts[n - 1], dir0 = seg.pts[1], dir1 = seg.pts[n - 2]
-        const joinStart = prev?.kind === 'ramp' && rampSide(node0, dir0, prev.pts, true) > 0
-        const joinEnd = next?.kind === 'ramp' && rampSide(node1, dir1, next.pts, false) > 0
+        const isRamp = (k?: Kind) => k === 'ramp' || k === 'green'
+        const joinStart = isRamp(prev?.kind) && rampSide(node0, dir0, prev.pts, true) > 0
+        const joinEnd = isRamp(next?.kind) && rampSide(node1, dir1, next.pts, false) > 0
         const fixed = await this.lane.correct(seg.pts, signal, { motorway: true, taperStart: !joinStart, taperEnd: !joinEnd })
         if (fixed === seg.pts) continue // 合わせられなかった
         if (joinStart) prev.pts = trimRamp(prev.pts, node0, dir0, fixed[0], true)

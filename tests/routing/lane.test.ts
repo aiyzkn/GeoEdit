@@ -210,3 +210,84 @@ test('画像タイルのキャッシュ: 上限を超えても、いま使うタ
   assert.ok(Math.abs(midShift(b) - 23.5) <= 1.5, `again ${midShift(b)}`)
   assert.ok(calls > 0)
 })
+
+// ── 緑の道（高速・有料）を z17 の緑の帯で上下線に分ける（経路の元の選択設計書 §4.4） ─────────────
+import { greenScan, greenParams, classifyGreenPixel } from '../../src/lib/routing/lane.ts'
+
+test('greenScan: 帯 2 本なら左の帯の中心、帯 1 本なら中心から左へ（帯の中に収める）、細い帯（ランプ）は決めない', () => {
+  const p = greenParams(17)
+  // 49 画素（R = 24）。帯 2 本: 右の帯 15〜23、灰色 24〜25、左の帯 26〜34
+  const two = build2([['.', 13], ['|', 2], ['#', 9], ['|', 2], ['#', 9], ['|', 2], ['.', 12]])
+  const r2 = greenScan(line(two), p, 4)!
+  assert.equal(r2.divided, true)
+  assert.equal(r2.offset, (26 + 34) / 2 - 24)
+  // 帯 1 本（19〜29 の 11 画素）。中心 24 から左へ 4 画素
+  const one = build2([['.', 17], ['|', 2], ['#', 11], ['|', 2], ['.', 17]])
+  const r1 = greenScan(line(one), p, 4)!
+  assert.equal(r1.divided, false)
+  assert.equal(r1.offset, 4)
+  // 寄せる量は帯の縁から marginPx の内側まで
+  assert.equal(greenScan(line(one), p, 10)!.offset, 11 / 2 - p.marginPx)
+  // ランプ（4 画素）
+  const ramp = build2([['.', 21], ['|', 1], ['#', 4], ['|', 1], ['.', 22]])
+  assert.equal(greenScan(line(ramp), p, 4), null)
+})
+
+function build2(parts: [string, number][]): string {
+  const s = parts.map(([c, n]) => c.repeat(n)).join('')
+  assert.equal(s.length, 49)
+  return s
+}
+
+test('画素の分類（緑の道）: 高速の緑は道、灰色は区切り、白い一般道・国道は背景', () => {
+  assert.equal(classifyGreenPixel(100, 195, 115), ROAD)
+  assert.equal(classifyGreenPixel(100, 100, 100), EDGE)
+  assert.equal(classifyGreenPixel(255, 255, 255), BG)
+  assert.equal(classifyGreenPixel(255, 122, 122), BG)
+  assert.equal(classifyGreenPixel(0, 0, 0), IGNORE)
+})
+
+/** 東西に走る緑の道の z17 の画像。d は世界座標（z18 の画素）での道の中心からの距離。bands(d) が色を返す */
+function greenRaster(bands: (a: number) => number[] | null): RasterSource {
+  return async (z, x, y) => {
+    assert.equal(z, 17)
+    const data = new Uint8ClampedArray(256 * 256 * 4)
+    for (let j = 0; j < 256; j++) {
+      const d = (y * 256 + j + 0.5) * 2 - Y0
+      const rgb = bands(Math.abs(d)) ?? [200, 220, 180]
+      for (let i = 0; i < 256; i++) {
+        const o = (j * 256 + i) * 4
+        data[o] = rgb[0]; data[o + 1] = rgb[1]; data[o + 2] = rgb[2]; data[o + 3] = 255
+      }
+    }
+    void x
+    return { width: 256, height: 256, data }
+  }
+}
+const G = [100, 195, 115], E = [100, 100, 100]
+
+test('緑の道: 帯 2 本なら、東へ進む線は北の帯、西へ進む線は南の帯の中心へ', async () => {
+  // 灰色の中央の線 |d| < 4、帯 4〜22（z17 で 9 画素）、縁 22〜26。帯の中心は ±13
+  const m = new LaneMatcher(greenRaster((a) => (a < 4 ? E : a < 22 ? G : a < 26 ? E : null)))
+  const east = await m.correct([ll(X0, Y0), ll(X1, Y0)], undefined, { greenZoom: 17 })
+  const west = await m.correct([ll(X1, Y0), ll(X0, Y0)], undefined, { greenZoom: 17 })
+  assert.ok(Math.abs(midShift(east) - 13) <= 1.5, `east ${midShift(east)}`)
+  assert.ok(Math.abs(midShift(west) + 13) <= 1.5, `west ${midShift(west)}`)
+})
+
+test('緑の道: 帯 1 本（分離帯が描かれていない）でも、上下線を分けて進む向きの左へ', async () => {
+  // 帯 |d| < 12（z17 で 12 画素）。左へ 4 m ≒ 4 画素（z17）≒ 8（世界座標）。z17 の画素 1 つ（世界座標で 2）の丸めを許す
+  const m = new LaneMatcher(greenRaster((a) => (a < 12 ? G : a < 16 ? E : null)))
+  const east = await m.correct([ll(X0, Y0), ll(X1, Y0)], undefined, { greenZoom: 17 })
+  const west = await m.correct([ll(X1, Y0), ll(X0, Y0)], undefined, { greenZoom: 17 })
+  assert.ok(Math.abs(midShift(east) - 8) <= 2.5, `east ${midShift(east)}`)
+  assert.ok(Math.abs(midShift(west) + 8) <= 2.5, `west ${midShift(west)}`)
+})
+
+test('緑の道: 細い帯（ランプ）・帯が無ければ、線はそのまま', async () => {
+  const ramp = new LaneMatcher(greenRaster((a) => (a < 4 ? G : a < 6 ? E : null)))
+  const pts = [ll(X0, Y0), ll(X1, Y0)]
+  assert.equal(await ramp.correct(pts, undefined, { greenZoom: 17 }), pts)
+  const none = new LaneMatcher(greenRaster(() => null))
+  assert.equal(await none.correct(pts, undefined, { greenZoom: 17 }), pts)
+})

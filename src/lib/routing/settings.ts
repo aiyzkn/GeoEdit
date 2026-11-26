@@ -1,6 +1,6 @@
 // 利用者ごと（ブラウザごと）の経路探索の設定（詳細設計書 §11）。純粋関数。保存・読み出しは呼ぶ側が行う。
 
-import type { RoadClass, RouteSource, RoutingOptions, SearchParams } from './types.ts'
+import type { RasterMaxZoom, RoadClass, RouteSource, RoutingOptions, SearchParams } from './types.ts'
 
 export type PriorityPreset = 'strong' | 'standard' | 'weak' | 'shortest' | 'custom'
 /** 里道 / 市区町村道 / 県道 / 国道 / 有料 / 高速 の順 */
@@ -20,9 +20,12 @@ export interface RoutingSettings {
   laneMatch: boolean
   /** 経路の元（経路の元の選択設計書 §3.1。安定するまで既定は vector） */
   source: RouteSource
+  /** 地図画像のズームの上限（経路の元の選択設計書 §4.3。既定 17） */
+  rasterMaxZoom: RasterMaxZoom
 }
 
 export const ROUTE_SOURCES: readonly RouteSource[] = ['vector', 'hybrid', 'raster']
+export const RASTER_MAX_ZOOMS: readonly RasterMaxZoom[] = [16, 17, 18]
 
 export const ROUTING_SETTINGS_KEY = 'geoedit-routing'
 
@@ -52,6 +55,7 @@ export const DEFAULT_ROUTING_SETTINGS: RoutingSettings = {
   snapMotorwayBiasM: 15,
   laneMatch: true,
   source: 'vector',
+  rasterMaxZoom: 17,
 }
 
 /** 谷の数え方（市区町村道より下は、市区町村道として数える）。利用者には変えさせない（§11.1） */
@@ -96,6 +100,7 @@ export function sanitizeSettings(raw: unknown): RoutingSettings {
     snapMotorwayBiasM: clampNum(r.snapMotorwayBiasM, LIMITS.snapMotorwayBiasM, d.snapMotorwayBiasM),
     laneMatch: bool(r.laneMatch, d.laneMatch),
     source: ROUTE_SOURCES.includes(r.source as RouteSource) ? (r.source as RouteSource) : d.source,
+    rasterMaxZoom: RASTER_MAX_ZOOMS.includes(r.rasterMaxZoom as RasterMaxZoom) ? (r.rasterMaxZoom as RasterMaxZoom) : d.rasterMaxZoom,
   }
 }
 
@@ -122,5 +127,6 @@ export function resolveRoutingOptions(s: RoutingSettings): RoutingOptions {
     snap: { radius: s.snapRadiusM, bias: s.snapMotorwayBiasM, maxClass: maxClassOf(s) },
     lane: s.laneMatch,
     source: s.source,
+    rasterMaxZoom: s.rasterMaxZoom,
   }
 }

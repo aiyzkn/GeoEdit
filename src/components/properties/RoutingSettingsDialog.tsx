@@ -2,7 +2,7 @@ import { useState } from 'react'
 import Modal from '@/components/common/Modal'
 import { useEditorStore } from '@/stores/editorStore'
 import { DEFAULT_ROUTING_SETTINGS, LIMITS, presetParams, type ClassWeights, type PriorityPreset } from '@/lib/routing/settings'
-import type { RouteSource } from '@/lib/routing/types'
+import type { RasterMaxZoom, RouteSource } from '@/lib/routing/types'
 
 interface Props {
   onClose: (changed: boolean) => void
@@ -23,6 +23,13 @@ const SOURCES: { value: RouteSource; label: string; desc: string }[] = [
   { value: 'vector', label: 'ベクトルタイルのみ', desc: '地理院のベクトルタイルの道路中心線で探す（いままでの方式）' },
   { value: 'hybrid', label: '地図画像＋ベクトルタイル', desc: '開通したばかりでベクトルタイルに無い道を、地図画像から足して探す。ベクトルタイルだけの経路と似ていれば、そちらに寄せる' },
   { value: 'raster', label: '地図画像のみ（試験的）', desc: '地図画像の色の付いた道（高速・国道・県道）だけで探す。白い一般道は使えない' },
+]
+
+/** 地図画像のズームの上限（designs/経路の元の選択設計書.md §4.3・§4.4） */
+const RASTER_MAX_ZOOM_OPTIONS: { value: RasterMaxZoom; label: string }[] = [
+  { value: 16, label: '16（緑の道は z16 の画像。一般道は合わせない）' },
+  { value: 17, label: '17（既定。緑の道は z17、一般道は z18 を併用）' },
+  { value: 18, label: '18（高速の分離帯のある本線は z18 の車線）' },
 ]
 
 /** 数値の入力欄。入力を確定したとき（blur・Enter）に範囲へ丸めて保存する */
@@ -150,10 +157,19 @@ export default function RoutingSettingsDialog({ onClose }: Props) {
           <label className="flex items-start gap-2">
             <input type="checkbox" checked={settings.laneMatch} onChange={(e) => setRoutingSettings({ laneMatch: e.target.checked })} className="mt-0.5" />
             <span>
-              分離帯のある道路の線を、地理院地図（標準地図）の画像に合わせる
-              <span className="block text-[var(--color-muted)]">分離帯が描かれている所は進む向きの左側（左側通行）の車道の中心へ、描かれていない所は道路全体の中心へ寄せます。表示中の背景地図に関係なく、標準地図の画像（最大ズーム）を取得します</span>
+              高速道路・分離帯のある道路の線を、地理院地図（標準地図）の画像に合わせる
+              <span className="block text-[var(--color-muted)]">高速道路・有料道路（緑の道）は、分離帯の描画によらず、上り・下りを別の線にして、進む向きの左側（左側通行）を通します。一般道は、分離帯が描かれている所は左側の車道の中心へ、描かれていない所は道路全体の中心へ寄せます。表示中の背景地図に関係なく、標準地図の画像を取得します</span>
             </span>
           </label>
+          {settings.laneMatch && (
+            <label className="flex items-center gap-2 ml-5">
+              画像のズームの上限
+              <select value={settings.rasterMaxZoom} onChange={(e) => setRoutingSettings({ rasterMaxZoom: Number(e.target.value) as RasterMaxZoom })}
+                className="px-1 py-0.5 bg-[var(--color-bg)] border border-[var(--color-border)] rounded" aria-label="画像のズームの上限">
+                {RASTER_MAX_ZOOM_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </label>
+          )}
         </fieldset>
 
         <div className="flex justify-between">
