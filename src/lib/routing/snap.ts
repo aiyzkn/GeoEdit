@@ -4,7 +4,8 @@ import { latLngToWorld, metersPerUnit, worldToLatLng } from './geo.ts'
 import type { RoadGraph } from './graph.ts'
 import { STRUCT_TUNNEL, type GraphPos, type SnapParams } from './types.ts'
 
-export function snapToGraph(g: RoadGraph, lat: number, lng: number, p: SnapParams): GraphPos | null {
+/** only を渡すと、その階級の辺にだけ寄せる */
+export function snapToGraph(g: RoadGraph, lat: number, lng: number, p: SnapParams, only?: (cls: number) => boolean): GraphPos | null {
   const [px, py] = latLngToWorld(lat, lng)
   const mpu = metersPerUnit(lat)
   const reach = (p.radius + p.bias) / mpu
@@ -12,7 +13,7 @@ export function snapToGraph(g: RoadGraph, lat: number, lng: number, p: SnapParam
   let best: { score: number; e: number; k: number; f: number } | null = null
   for (let i = 0; i < near.length; i += 2) {
     const e = near[i], k = near[i + 1]
-    if (g.edgeCls[e] > p.maxClass) continue
+    if (g.edgeCls[e] > p.maxClass || (only && !only(g.edgeCls[e]))) continue
     const [ax, ay] = g.shapePoint(e, k - 1)
     const [bx, by] = g.shapePoint(e, k)
     const dx = bx - ax, dy = by - ay
