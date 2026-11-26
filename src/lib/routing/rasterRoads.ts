@@ -2,7 +2,8 @@
 // （経路の元の選択設計書 §2.3・§3.2・§3.3）。経路の探索・ベクトルのグラフへの足し込みは、このモジュールの外で行う。
 //
 // 手順:
-//   1. 画素を道の種類に分ける（classifyRoadImage）。白い一般道は地の色と同じなので取り出さない（設計書 §2.4）
+//   1. 画素を道の種類に分ける（classifyRoadImage）。白い一般道は地の色と同じなので、色では取り出さない（設計書 §2.4）。
+//      地図画像のみ（raster）のときだけ、markOutlineRoads で灰色の縁（輪郭）から一般道を取り出す（§9）
 //   2. 道に重なる小さな注記・記号（番号の盾など）を、接している道に吸収する
 //   3. 種類の層ごと（高速 / 国道・県道）に、色の付いた画素の連結成分を、外接矩形が近いものどうしでまとめ、
 //      まとまりの外接矩形の中だけで、小さな切れ目をふさぎ（closing）、細線化する（Zhang–Suen）。全面の配列で繰り返さない（§3.3）
@@ -27,8 +28,13 @@ export const RK_NATIONAL = 2
 export const RK_PREFECTURAL = 3
 /** 注記・記号（道に重なっていれば、その道に吸収する候補） */
 export const RK_SYMBOL = 4
+/** 白い一般道（灰色の縁に挟まれた細い白の帯と、1 本の灰色の線。markOutlineRoads で付ける。地図画像のみのときだけ） */
+export const RK_GENERAL = 5
 
-export type RoadKind = typeof RK_MOTORWAY | typeof RK_NATIONAL | typeof RK_PREFECTURAL
+export type RoadKind = typeof RK_MOTORWAY | typeof RK_NATIONAL | typeof RK_PREFECTURAL | typeof RK_GENERAL
+
+const isColored = (v: number) => v >= RK_MOTORWAY && v <= RK_PREFECTURAL
+const isRoadKind = (v: number) => isColored(v) || v === RK_GENERAL
 
 export interface RasterRoadImage {
   width: number
@@ -39,6 +45,8 @@ export interface RasterRoadImage {
 
 /** 標準地図の 1 画素を、色の付いた道の種類に分ける（色は mapMatch/palette.ts の実測値に従う） */
 export function classifyRoadPixel(r: number, g: number, b: number): number {
+  // 金茶（法面・崖のハッチ、行政界の破線）は注記として道に吸収しない。帯に接するハッチを吸収すると、帯が法面の側へ太り、骨格が寄る
+  if (isGold(r, g, b)) return RK_NONE
   const c = classifyPixel('gsi-std', r, g, b)
   if (c === IGNORE) return RK_SYMBOL
   if (c !== ROAD) return RK_NONE
@@ -58,6 +66,153 @@ export function classifyRoadImage(rgba: Uint8Array | Uint8ClampedArray, width: n
   return { width, height, kind }
 }
 
+/** 法面のハッチ・行政界の金茶（palette.ts の行政界 #c8a03c と同じ許容） */
+function isGold(r: number, g: number, b: number): boolean {
+  return (r - 200) ** 2 + (g - 160) ** 2 + (b - 60) ** 2 <= 45 ** 2
+}
+
+/** 道の縁などの灰色（palette.ts の EDGE と同じ範囲。注記の黒は含めない） */
+function isEdgeGray(r: number, g: number, b: number): boolean {
+  const mx = Math.max(r, g, b)
+  const mn = Math.min(r, g, b)
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+  return mx - mn <= 16 && lum > 95 && lum <= 190
+}
+
+export interface OutlineOptions {
+  /** 道の帯とみなす白の幅の半分の上限（画素）。これより広い白は地。既定 5（z17 で約 10 m の幅まで） */
+  stripPx?: number
+  /** 高速の緑の帯からこの距離（画素）以内は、帯の縁（z17 では帯と縁の灰色の線の間に 2〜3 画素の隙間がある）なので道にしない。既定 5 */
+  motorwayCasingPx?: number
+  /** 外接矩形の長い辺がこれより短い一般道の連結成分（画素）は捨てる（荒地・針葉樹などの記号）。既定 24 */
+  minSpanPx?: number
+  /** 破線の道の切れ目をふさぐ半径（画素。灰色の線の closing）。既定 2 */
+  dashGapPx?: number
+}
+
+/**
+ * 白い一般道を、輪郭（灰色の縁）から取り出し、kind の RK_NONE の画素に RK_GENERAL を付ける（その場で書き換える）。
+ * 標準地図の白い道は地の色と同じなので、色では取り出せない（設計書 §2.4）。そこで
+ *   - 灰色の縁に挟まれた細い白の帯（白の領域から、半径 stripPx の opening で残る広い所を除いたもの）
+ *   - 灰色の線そのもの（幅の狭い道は 1 本の灰色の線で描かれる。帯の縁も含めて、帯と一緒に細線化する）
+ * を道とする。灰色以外の線（等高線・法面・水涯線・建物の縁）と注記は、縁として扱わない（帯を切らない）。
+ * タイル 1 枚ごとに呼んでよい（タイルの外は縁が無いものとして扱うので、境目で広い地が細い帯に見えることはない）
+ */
+export function markOutlineRoads(rgba: Uint8Array | Uint8ClampedArray, kind: Uint8Array, width: number, height: number, options: OutlineOptions = {}): void {
+  const R = options.stripPx ?? 5
+  const casing = options.motorwayCasingPx ?? 5
+  const minSpan = options.minSpanPx ?? 24
+  const gap = options.dashGapPx ?? 2
+  const N = width * height
+  let edge = new Uint8Array(N)
+  for (let p = 0, o = 0; p < N; p++, o += 4) {
+    if (rgba[o + 3] !== 0 && kind[p] === RK_NONE && isEdgeGray(rgba[o], rgba[o + 1], rgba[o + 2])) edge[p] = 1
+  }
+  // 破線（徒歩道・庭園路）の切れ目をふさぐ（closing）。色の付いた道の上には広げない
+  if (gap > 0) {
+    const dEdge0 = chamfer(width, height, (p) => edge[p] === 1)
+    const dOut = chamfer(width, height, (p) => dEdge0[p] > gap)
+    const closed = new Uint8Array(N)
+    for (let p = 0; p < N; p++) if (kind[p] === RK_NONE && (edge[p] || dOut[p] > gap)) closed[p] = 1
+    edge = closed
+  }
+  // 高速の帯の縁の灰色は道にしない（帯に沿う偽の一般道になるため）
+  const nearMotorway = chamfer(width, height, (p) => kind[p] === RK_MOTORWAY)
+  // 地（縁でも色の付いた道でもない所）のうち、縁・色の付いた道から R 以上離れた所を中心に、R だけ広げた所 = 広い地
+  const dEdge = chamfer(width, height, (p) => edge[p] === 1 || isColored(kind[p]))
+  const dCenter = chamfer(width, height, (p) => dEdge[p] >= R)
+  const mark = new Uint8Array(N)
+  // 帯の切れ目（白い道が帯の上を跨ぐ所）の白: 縦・横・斜めのどれかの向きで、両側 crossPx 以内に帯がある
+  const crossPx = 8
+  const isMw = (x: number, y: number) => x >= 0 && y >= 0 && x < width && y < height && kind[y * width + x] === RK_MOTORWAY
+  const inBandGap = (p: number): boolean => {
+    const x = p % width
+    const y = (p - x) / width
+    for (const [dx, dy] of [[1, 0], [0, 1], [1, 1], [1, -1]]) {
+      let a = false
+      let b = false
+      for (let s = 1; s <= crossPx && !(a && b); s++) {
+        if (!a && isMw(x + dx * s, y + dy * s)) a = true
+        if (!b && isMw(x - dx * s, y - dy * s)) b = true
+      }
+      if (a && b) return true
+    }
+    return false
+  }
+  for (let p = 0; p < N; p++) {
+    if (kind[p] !== RK_NONE) continue
+    // 帯の縁（灰色の線・帯との間の白）は道にしない。ただし帯の切れ目の白（帯を跨ぐ道）は残す
+    if (nearMotorway[p] <= casing && (edge[p] || !inBandGap(p))) continue
+    if (edge[p] || (dEdge[p] > 0 && dCenter[p] > R)) mark[p] = 1
+  }
+  // 小さな連結成分（記号の中の白・短い灰色の切れ端）を捨てる
+  const seen = new Uint8Array(N)
+  const stack: number[] = []
+  const comp: number[] = []
+  for (let p = 0; p < N; p++) {
+    if (!mark[p] || seen[p]) continue
+    comp.length = 0
+    stack.push(p)
+    seen[p] = 1
+    while (stack.length) {
+      const q = stack.pop()!
+      comp.push(q)
+      const x = q % width
+      const y = (q - x) / width
+      for (let dy = -1; dy <= 1; dy++) {
+        const ny = y + dy
+        if (ny < 0 || ny >= height) continue
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx
+          if (nx < 0 || nx >= width) continue
+          const r = ny * width + nx
+          if (mark[r] && !seen[r]) { seen[r] = 1; stack.push(r) }
+        }
+      }
+    }
+    // 小さな成分（地図記号）を捨てる。タイルの端に掛かる成分は、隣のタイルへ続くので残す
+    let x0 = width, y0 = height, x1 = -1, y1 = -1
+    for (const q of comp) { const x = q % width, y = (q - x) / width; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y }
+    const touchesBorder = x0 === 0 || y0 === 0 || x1 === width - 1 || y1 === height - 1
+    if (Math.max(x1 - x0, y1 - y0) + 1 >= minSpan || touchesBorder) for (const q of comp) kind[q] = RK_GENERAL
+  }
+}
+
+/** src(p) が真の画素からの距離（chamfer 3-4 を 3 で割った画素の単位）。src が無ければ大きな値 */
+function chamfer(W: number, H: number, src: (p: number) => boolean): Float32Array {
+  const INF = 1e9
+  const d = new Float32Array(W * H)
+  for (let p = 0; p < d.length; p++) d[p] = src(p) ? 0 : INF
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const p = y * W + x
+      let v = d[p]
+      if (x > 0 && d[p - 1] + 3 < v) v = d[p - 1] + 3
+      if (y > 0) {
+        if (d[p - W] + 3 < v) v = d[p - W] + 3
+        if (x > 0 && d[p - W - 1] + 4 < v) v = d[p - W - 1] + 4
+        if (x < W - 1 && d[p - W + 1] + 4 < v) v = d[p - W + 1] + 4
+      }
+      d[p] = v
+    }
+  }
+  for (let y = H - 1; y >= 0; y--) {
+    for (let x = W - 1; x >= 0; x--) {
+      const p = y * W + x
+      let v = d[p]
+      if (x < W - 1 && d[p + 1] + 3 < v) v = d[p + 1] + 3
+      if (y < H - 1) {
+        if (d[p + W] + 3 < v) v = d[p + W] + 3
+        if (x < W - 1 && d[p + W + 1] + 4 < v) v = d[p + W + 1] + 4
+        if (x > 0 && d[p + W - 1] + 4 < v) v = d[p + W - 1] + 4
+      }
+      d[p] = v
+    }
+  }
+  for (let p = 0; p < d.length; p++) d[p] /= 3
+  return d
+}
+
 export interface SkeletonOptions {
   /** 切れ目をふさぐ半径（画素）。高速の帯の上の灰色の点・中央の線を埋める。既定 3（z16 で試した値） */
   closePx?: number
@@ -73,6 +228,19 @@ export interface SkeletonOptions {
   symbolMaxPx?: number
   /** これより小さい骨格のまとまり（画素数）は捨てる（ごみ）。既定 8 */
   minSkeletonPx?: number
+  /** 一般道（RK_GENERAL）を含む層の切れ目をふさぐ半径（画素）。並んだ道どうしをつながないよう小さく。既定 1 */
+  generalClosePx?: number
+  /** 一般道どうしの橋の長さの上限（画素）。行き止まりの道が多いので短く。既定 10 */
+  generalBridgePx?: number
+  /**
+   * 一般道があるとき（地図画像のみ）、高速の端から別の種類の道へ橋を架けるのは、端の帯の幅がこれ以下（画素）のときだけ（ランプの端）。
+   * 本線の帯が跨道橋で切れた所から、跨ぐ道へ降りないため。既定 6（z17 で本線の帯 約 10〜11、ランプ 約 4）
+   */
+  rampMaxWidthPx?: number
+  /** 向かい合う一般道の端どうし（高速の帯を跨ぐ所・注記で切れた所）へ架ける橋の長さの上限（画素）。既定 80 */
+  generalAcrossPx?: number
+  /** 一般道の、行き止まりの短い枝（ひげ。画素）を刈る長さ。跨道部の「⊃」の縁で骨格の端が Y 字に割れるため。既定 25 */
+  spurPx?: number
 }
 
 export interface SkeletonNode {
@@ -98,7 +266,7 @@ export interface RoadSkeleton {
   stats: { groups: number; skeletonPx: number; bridges: number; symbolsAbsorbed: number }
 }
 
-const DEF = { closePx: 3, bridgePx: 40, crossBridgePx: 12, minCos: 0.85, crossMinCos: 0.5, symbolMaxPx: 400, minSkeletonPx: 8 }
+const DEF = { closePx: 3, bridgePx: 40, crossBridgePx: 12, minCos: 0.85, crossMinCos: 0.5, symbolMaxPx: 400, minSkeletonPx: 8, generalClosePx: 1, generalBridgePx: 10, rampMaxWidthPx: 6, generalAcrossPx: 80, spurPx: 25 }
 
 /** 画像から骨格のグラフを取り出す */
 export function extractRoadSkeleton(img: RasterRoadImage, options: SkeletonOptions = {}): RoadSkeleton {
@@ -111,17 +279,39 @@ export function extractRoadSkeleton(img: RasterRoadImage, options: SkeletonOptio
   const edges: SkeletonEdge[] = []
   let groups = 0
   let skeletonPx = 0
-  for (const layer of [[RK_MOTORWAY], [RK_NATIONAL, RK_PREFECTURAL]] as const) {
-    const inLayer = (v: number) => (layer as readonly number[]).includes(v)
-    for (const g of groupComponents(k, W, H, inLayer, opt.closePx)) {
-      const sk = thinGroup(W, H, g, opt.closePx)
+  // 一般道（地図画像のみのとき）は、国道・県道と同じ層（平面で交わることが多い）。高速とは層を分ける（§3.2）
+  let hasGeneral = false
+  for (let p = 0; p < k.length; p++) if (k[p] === RK_GENERAL) { hasGeneral = true; break }
+  const layers: { kinds: readonly number[]; fallback: RoadKind; close: number }[] = [
+    { kinds: [RK_MOTORWAY], fallback: RK_MOTORWAY, close: opt.closePx },
+    hasGeneral
+      ? { kinds: [RK_NATIONAL, RK_PREFECTURAL, RK_GENERAL], fallback: RK_GENERAL, close: opt.generalClosePx }
+      : { kinds: [RK_NATIONAL, RK_PREFECTURAL], fallback: RK_NATIONAL, close: opt.closePx },
+  ]
+  for (const layer of layers) {
+    const inLayer = (v: number) => layer.kinds.includes(v)
+    for (const g of groupComponents(k, W, H, inLayer, layer.close)) {
+      const sk = thinGroup(W, H, g, layer.close)
       if (sk.count < opt.minSkeletonPx) continue
       groups++
       skeletonPx += sk.count
-      traceGraph(sk, k, W, layer[0], nodes, edges)
+      traceGraph(sk, k, W, layer.fallback, nodes, edges)
     }
   }
-  const bridges = addBridges(nodes, edges, opt)
+  // 高速の端の帯の幅（7 × 7 の窓の高速の画素の数 ÷ 7）。一般道があるときだけ、太い端（本線）から別の種類へ架けない
+  const R = 3
+  const narrowEnd = (n: number): boolean => {
+    if (!hasGeneral) return true
+    const { x, y } = nodes[n]
+    let c = 0
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      const xx = x + dx, yy = y + dy
+      if (xx >= 0 && yy >= 0 && xx < W && yy < H && k[yy * W + xx] === RK_MOTORWAY) c++
+    }
+    return c / (2 * R + 1) <= opt.rampMaxWidthPx
+  }
+  if (hasGeneral) pruneSpurs(nodes.length, edges, opt.spurPx)
+  const bridges = addBridges(nodes, edges, opt, narrowEnd)
   return { nodes, edges, stats: { groups, skeletonPx, bridges, symbolsAbsorbed } }
 }
 
@@ -142,7 +332,7 @@ function absorbSymbols(k: Uint8Array, W: number, H: number, maxPx: number): numb
     comp.length = 0
     stack.push(p)
     seen[p] = 1
-    const touch = [0, 0, 0, 0]
+    const touch = [0, 0, 0, 0, 0, 0]
     while (stack.length) {
       const q = stack.pop()!
       comp.push(q)
@@ -159,7 +349,7 @@ function absorbSymbols(k: Uint8Array, W: number, H: number, maxPx: number): numb
             seen[r] = 1
             stack.push(r)
           }
-        } else if (v >= RK_MOTORWAY && v <= RK_PREFECTURAL) touch[v]++
+        } else if (isColored(v)) touch[v]++
         else touch[0]++
       }
     }
@@ -372,14 +562,16 @@ function neighbors(sk: LocalSkeleton, p: number, out: number[]): number[] {
 
 /** 骨格の画素の近くの元の画素から、道の種類を決める（closing で埋めた画素のため） */
 function kindAt(k: Uint8Array, W: number, x: number, y: number, fallback: RoadKind): RoadKind {
-  const c = [0, 0, 0, 0]
+  const c = [0, 0, 0, 0, 0, 0]
   for (let dy = -2; dy <= 2; dy++)
     for (let dx = -2; dx <= 2; dx++) {
       const v = k[(y + dy) * W + x + dx]
-      if (v >= RK_MOTORWAY && v <= RK_PREFECTURAL) c[v]++
+      if (isRoadKind(v)) c[v]++
     }
   if (fallback === RK_MOTORWAY) return RK_MOTORWAY
-  if (c[RK_NATIONAL] === 0 && c[RK_PREFECTURAL] === 0) return fallback
+  const colored = c[RK_NATIONAL] + c[RK_PREFECTURAL]
+  // 一般道の層: 色の付いた画素が一般道の印より少なければ一般道（色の付いた道の縁の灰色にも一般道の印が付くため）
+  if (colored === 0 || (fallback === RK_GENERAL && colored < c[RK_GENERAL])) return fallback
   return c[RK_NATIONAL] >= c[RK_PREFECTURAL] ? RK_NATIONAL : RK_PREFECTURAL
 }
 
@@ -428,7 +620,7 @@ function traceGraph(sk: LocalSkeleton, k: Uint8Array, imgW: number, layerKind: R
   const makeEdge = (pts: number[], a: number, b: number): SkeletonEdge => {
     const points: number[] = []
     let len = 0
-    const c = [0, 0, 0, 0]
+    const c = [0, 0, 0, 0, 0, 0]
     for (let i = 0; i < pts.length; i++) {
       const x = gx(pts[i])
       const y = gy(pts[i])
@@ -436,7 +628,9 @@ function traceGraph(sk: LocalSkeleton, k: Uint8Array, imgW: number, layerKind: R
       if (i > 0) len += Math.hypot(x - points[2 * i - 2], y - points[2 * i - 1])
       c[kindAt(k, imgW, x, y, layerKind)]++
     }
-    const kind: RoadKind = layerKind === RK_MOTORWAY ? RK_MOTORWAY : c[RK_NATIONAL] >= c[RK_PREFECTURAL] ? RK_NATIONAL : RK_PREFECTURAL
+    const kind: RoadKind = layerKind === RK_MOTORWAY ? RK_MOTORWAY
+      : c[RK_GENERAL] > c[RK_NATIONAL] + c[RK_PREFECTURAL] ? RK_GENERAL
+        : c[RK_NATIONAL] >= c[RK_PREFECTURAL] ? RK_NATIONAL : RK_PREFECTURAL
     return { a, b, kind, lengthPx: len, points, bridge: false }
   }
   const nb0: number[] = []
@@ -451,9 +645,33 @@ function traceGraph(sk: LocalSkeleton, k: Uint8Array, imgW: number, layerKind: R
 
 // ── 5. 端点の橋渡し ───────────────────────────────────────
 
+/** 一般道の、片方の端が行き止まりで長さ spurPx 未満の辺（ひげ）を消す。分岐の残りが 2 本以上あるときだけ（道そのものの端は残す） */
+function pruneSpurs(nodeCount: number, edges: SkeletonEdge[], spurPx: number): void {
+  for (let pass = 0; pass < 2; pass++) {
+    const degree = new Array<number>(nodeCount).fill(0)
+    for (const e of edges) { degree[e.a]++; degree[e.b]++ }
+    const drop = new Set<number>()
+    const removedAt = new Array<number>(nodeCount).fill(0)
+    edges.forEach((e, i) => {
+      if (e.kind !== RK_GENERAL || e.lengthPx >= spurPx || e.a === e.b) return
+      const tip = degree[e.a] === 1 ? e.a : degree[e.b] === 1 ? e.b : -1
+      if (tip < 0) return
+      const root = tip === e.a ? e.b : e.a
+      // 分岐点に、ひげ以外の辺が 1 本は残ること
+      if (degree[root] - removedAt[root] - 1 < 1 || degree[root] < 3) return
+      drop.add(i)
+      removedAt[root]++
+    })
+    if (drop.size === 0) return
+    const kept = edges.filter((_, i) => !drop.has(i))
+    edges.length = 0
+    edges.push(...kept)
+  }
+}
+
 /** 端点（次数 1 の節点）から、進む向きの先にある別の骨格へ橋を架ける。架けた数を返す */
-function addBridges(nodes: SkeletonNode[], edges: SkeletonEdge[], opt: typeof DEF): number {
-  const reach = Math.max(opt.bridgePx, opt.crossBridgePx)
+function addBridges(nodes: SkeletonNode[], edges: SkeletonEdge[], opt: typeof DEF, narrowEnd: (n: number) => boolean = () => true): number {
+  const reach = Math.max(opt.bridgePx, opt.crossBridgePx, opt.generalAcrossPx)
   if (reach <= 0 || edges.length === 0) return 0
   // 連結成分（橋を架ける前）
   const parent = nodes.map((_, i) => i)
@@ -484,18 +702,27 @@ function addBridges(nodes: SkeletonNode[], edges: SkeletonEdge[], opt: typeof DE
 
   interface Bridge { from: number; edge: number; at: number; d: number; kind: RoadKind }
   const found: Bridge[] = []
+  // 端点の進む向き（単位ベクトル）: 端点から骨格を 10 点たどった点 → 端点
+  const dir = new Map<number, [number, number]>()
   for (let n = 0; n < nodes.length; n++) {
     if (degree[n] !== 1) continue
     const e = edges[firstEdge[n]]
     const cnt = e.points.length / 2
-    // 進む向き: 端点から骨格を 10 点たどった点 → 端点
     const back = Math.min(10, cnt - 1)
     const bi = e.a === n ? back : cnt - 1 - back
-    const { x, y } = nodes[n]
-    const vx = x - e.points[2 * bi]
-    const vy = y - e.points[2 * bi + 1]
+    const vx = nodes[n].x - e.points[2 * bi]
+    const vy = nodes[n].y - e.points[2 * bi + 1]
     const vl = Math.hypot(vx, vy)
-    if (vl < 3) continue
+    if (vl >= 3) dir.set(n, [vx / vl, vy / vl])
+  }
+  for (let n = 0; n < nodes.length; n++) {
+    if (degree[n] !== 1) continue
+    const e = edges[firstEdge[n]]
+    const { x, y } = nodes[n]
+    const v = dir.get(n)
+    if (!v) continue
+    const [vx, vy] = v
+    const vl = 1
     // 同じ種類への橋を先に選ぶ（跨ぐ道の切れ目で、交わる別の種類の道へ曲がらないため）。無いときだけ別の種類へ
     const best: (Bridge | null)[] = [null, null]
     const bestScore = [Infinity, Infinity]
@@ -515,8 +742,20 @@ function addBridges(nodes: SkeletonNode[], edges: SkeletonEdge[], opt: typeof DE
           const d = Math.hypot(dx, dy)
           if (d < 1) continue
           const c = (dx * vx + dy * vy) / (d * vl)
-          const same = te.kind === e.kind || (te.kind !== RK_MOTORWAY && e.kind !== RK_MOTORWAY)
-          if (same ? d > opt.bridgePx || c < opt.minCos : d > opt.crossBridgePx || c < opt.crossMinCos) continue
+          // 同じ種類: 色の付いた道どうし（高速 / 国道・県道）、一般道どうし。一般道と色の付いた道の間は別の種類
+          // 一般道の端から高速へは架けない（帯の縁・跨道橋で切れた所から高速へ乗らないため）。高速の端（ランプの端）からは架ける
+          if (e.kind === RK_GENERAL && te.kind === RK_MOTORWAY) continue
+          const general = e.kind === RK_GENERAL || te.kind === RK_GENERAL
+          const same = general ? te.kind === e.kind : te.kind === e.kind || (te.kind !== RK_MOTORWAY && e.kind !== RK_MOTORWAY)
+          let maxSame = general ? opt.generalBridgePx : opt.bridgePx
+          if (general && same) {
+            // 行き先が、こちらを向いた一般道の端なら、長めの橋を許す（帯を跨ぐ道・注記で切れた道）
+            const ti = a[j + 1]
+            const tn = ti === 0 ? te.a : ti === te.points.length / 2 - 1 ? te.b : -1
+            const tv = tn >= 0 && degree[tn] === 1 ? dir.get(tn) : undefined
+            if (tv && tv[0] * vx + tv[1] * vy <= -0.8) maxSame = opt.generalAcrossPx
+          }
+          if (same ? d > maxSame || c < opt.minCos : d > opt.crossBridgePx || c < opt.crossMinCos) continue
           const score = d * (2 - c)
           const s = same ? 0 : 1
           if (score < bestScore[s]) {
@@ -525,7 +764,7 @@ function addBridges(nodes: SkeletonNode[], edges: SkeletonEdge[], opt: typeof DE
           }
         }
       }
-    const pick = best[0] ?? best[1]
+    const pick = best[0] ?? (e.kind === RK_MOTORWAY && best[1] && !narrowEnd(n) ? null : best[1])
     if (pick) found.push(pick)
   }
   if (found.length === 0) return 0

@@ -70,6 +70,8 @@ export class Router {
   private readonly lane: LaneMatcher | null
   /** 地図画像の道（経路の元が hybrid・raster のとき。経路の元の選択設計書 §3） */
   private readonly rasterRoads: RasterRoadSource | null
+  /** 地図画像のみ（raster）: z17 の画像から、色の付いた道に加えて白い一般道を輪郭で取り出す（設計書 §9） */
+  private readonly rasterOutline: RasterRoadSource | null
 
   constructor(
     loader: TileBytesLoader = fetchRoadTileBytes,
@@ -79,6 +81,7 @@ export class Router {
     const raster = opts.raster === undefined ? browserStdRaster() : opts.raster
     this.lane = raster ? new LaneMatcher(raster) : null
     this.rasterRoads = raster ? new RasterRoadSource(raster) : null
+    this.rasterOutline = raster ? new RasterRoadSource(raster, { outline: true }) : null
     this.cache = new RoadTileCache(loader, { max: opts.cacheTiles, concurrency: opts.concurrency })
     this.coarseCache = new RoadTileCache(opts.coarseLoader ?? fetchCoarseRoadTileBytes, { max: 400, concurrency: opts.concurrency })
   }
@@ -118,15 +121,20 @@ export class Router {
   /**
    * 地図画像の道を使って探す（経路の元の選択設計書 §3.1・§3.2）。
    * hybrid: ベクトルのグラフに、ベクトルに無い画像の道を足して探す。画像の道を通った経路が、ベクトルだけの経路と似ていれば、ベクトルの経路を使う。
-   * raster: 画像の色の付いた道だけで探す（試験的）。
-   * 画像を使えないとき（読めない環境・大きすぎる・取得の失敗）は、ベクトルだけで探し、raster に理由を入れる
+   * raster: 画像だけで探す（ベクトルタイルは使わない。設計書 §9）。z17 の画像の色の付いた道と、輪郭から取り出した白い一般道。
+   * 区間が長くて z17 では大きすぎるときは、z16 の色の付いた道だけで探す。
+   * 画像を使えないとき（読めない環境・大きすぎる・取得の失敗）は、hybrid ならベクトルだけで探し、raster なら直線で結ぶ（どちらも raster に理由を入れる）
    */
   private async routeLegWithRaster(from: LatLng, to: LatLng, options: RoutingOptions, source: 'hybrid' | 'raster', signal?: AbortSignal, onProgress?: Progress): Promise<RouteResult> {
-    const vectorOnly = async (note: RasterNote): Promise<RouteResult> => ({ ...(await this.routeLegVector(from, to, options, signal, onProgress)), raster: note })
-    if (planLeg(distanceLL(from, to)).kind === 'too-long') return fallback(from, to, 'too-long')
-    if (!this.rasterRoads) return vectorOnly('unavailable')
     const hybrid = source === 'hybrid'
-    const linesP = this.rasterRoads.lines(from, to, signal)
+    const vectorOnly = async (note: RasterNote): Promise<RouteResult> => hybrid
+      ? ({ ...(await this.routeLegVector(from, to, options, signal, onProgress)), raster: note })
+      : ({ ...fallback(from, to, 'no-route'), raster: note })
+    if (planLeg(distanceLL(from, to)).kind === 'too-long') return fallback(from, to, 'too-long')
+    if (!this.rasterRoads || !this.rasterOutline) return vectorOnly('unavailable')
+    const linesP = hybrid
+      ? this.rasterRoads.lines(from, to, signal)
+      : this.rasterOutline.lines(from, to, signal).then((r) => (!r.ok && r.reason === 'too-large' ? this.rasterRoads!.lines(from, to, signal) : r))
     const keys = hybrid ? await this.loadVectorTiles(from, to, options, signal, onProgress) : []
     const lines = await linesP
     if (signal?.aborted) return fallback(from, to, 'aborted')

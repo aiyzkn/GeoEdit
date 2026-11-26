@@ -6,13 +6,17 @@
 import { latLngToWorld, metersPerUnit } from './geo.ts'
 import { RoadGraph } from './graph.ts'
 import type { RasterSource } from './lane.ts'
-import { classifyRoadImage, extractRoadSkeleton, RK_MOTORWAY, RK_NATIONAL, type RoadKind } from './rasterRoads.ts'
+import { classifyRoadImage, extractRoadSkeleton, markOutlineRoads, RK_GENERAL, RK_MOTORWAY, RK_NATIONAL, type RoadKind } from './rasterRoads.ts'
 import type { LatLng, RoadTile } from './types.ts'
 
 /** 道をたどる画像のズーム（設計書 §4.3。z17 は重すぎる） */
 export const RASTER_ROAD_ZOOM = 16
-/** z16 の画素 1 つ = 世界座標（z14 × 4096）の 4 単位 */
-const UNITS_PER_PX = 2 ** (14 + 12 - 8 - RASTER_ROAD_ZOOM)
+/** 地図画像のみ（raster）で、白い一般道を輪郭から取り出す画像のズーム（利用者が主に見る z17） */
+export const RASTER_OUTLINE_ZOOM = 17
+/** 画素 1 つ = 世界座標（z14 × 4096）の何単位か（z16 で 4、z17 で 2） */
+const unitsPerPx = (z: number) => 2 ** (14 + 12 - 8 - z)
+/** z16 の画素 1 つ = 世界座標の 4 単位 */
+const UNITS_PER_PX = unitsPerPx(RASTER_ROAD_ZOOM)
 
 export const RASTER_ROADS = {
   /** 始点–終点の線分から両側に取る幅（m。§3.3） */
@@ -37,6 +41,19 @@ export const RASTER_ROADS = {
   simplifyPx: 1.5,
 } as const
 
+/** 地図画像のみ（raster）で、輪郭から一般道を取り出すときの値（z17） */
+export const RASTER_OUTLINE = {
+  /** 回廊の幅（両側。m）: 区間の長さ × ratio を、min〜max に収める */
+  corridorRatio: 0.3,
+  corridorMinM: 300,
+  corridorMaxM: 1200,
+  /** 1 区間で取る画像の枚数・並べた画像の大きさの上限。超えたら、色の付いた道だけ（z16）に戻す */
+  maxTiles: 600,
+  maxPixels: 40_000_000,
+  /** 一般道どうしの橋（m）。行き止まりの道へ架けすぎないよう短く */
+  generalBridgeM: 12,
+} as const
+
 /** 骨格の線（世界座標）。kind は道の種類（rasterRoads.ts の RK_*） */
 export interface RasterRoadLine {
   kind: RoadKind
@@ -50,7 +67,7 @@ export type RasterLinesResult =
 
 /** 道の種類 → グラフの階級（設計書 §3.2 の 3） */
 export function classOfKind(kind: RoadKind): number {
-  return kind === RK_MOTORWAY ? 6 : kind === RK_NATIONAL ? 4 : 3
+  return kind === RK_MOTORWAY ? 6 : kind === RK_NATIONAL ? 4 : kind === RK_GENERAL ? 2 : 3
 }
 
 /** 区間のまわりの画像の道の骨格を作る。画像のタイルは分類した形で覚える */
@@ -58,18 +75,23 @@ export class RasterRoadSource {
   private readonly cache = new Map<string, Uint8Array | null>()
 
   private readonly source: RasterSource
-  private readonly opts: { cacheTiles?: number }
+  private readonly opts: { cacheTiles?: number; outline?: boolean }
+  /** 画像のズーム（色の付いた道だけなら z16、輪郭から一般道も取るなら z17） */
+  readonly zoom: number
 
-  constructor(source: RasterSource, opts: { cacheTiles?: number } = {}) {
+  /** outline = true なら、z17 の画像から白い一般道も輪郭で取り出す（地図画像のみ。設計書 §9） */
+  constructor(source: RasterSource, opts: { cacheTiles?: number; outline?: boolean } = {}) {
     this.source = source
     this.opts = opts
+    this.zoom = opts.outline ? RASTER_OUTLINE_ZOOM : RASTER_ROAD_ZOOM
   }
 
-  /** 始点–終点の線分のまわり（両側 corridorM）の、z16 のタイルの番号 */
-  static corridorTiles(from: LatLng, to: LatLng, corridorM: number = RASTER_ROADS.corridorM): { x: number; y: number }[] {
-    const [ax, ay] = latLngToWorld(from.lat, from.lng).map((v) => v / UNITS_PER_PX)
-    const [bx, by] = latLngToWorld(to.lat, to.lng).map((v) => v / UNITS_PER_PX)
-    const mpp = metersPerUnit((from.lat + to.lat) / 2) * UNITS_PER_PX
+  /** 始点–終点の線分のまわり（両側 corridorM）の、zoom のタイルの番号 */
+  static corridorTiles(from: LatLng, to: LatLng, corridorM: number = RASTER_ROADS.corridorM, zoom: number = RASTER_ROAD_ZOOM): { x: number; y: number }[] {
+    const upp = unitsPerPx(zoom)
+    const [ax, ay] = latLngToWorld(from.lat, from.lng).map((v) => v / upp)
+    const [bx, by] = latLngToWorld(to.lat, to.lng).map((v) => v / upp)
+    const mpp = metersPerUnit((from.lat + to.lat) / 2) * upp
     const pad = corridorM / mpp
     const reach = pad + 256 * Math.SQRT1_2 // タイルの中心から角まで
     const out: { x: number; y: number }[] = []
@@ -88,12 +110,17 @@ export class RasterRoadSource {
   }
 
   async lines(from: LatLng, to: LatLng, signal?: AbortSignal): Promise<RasterLinesResult> {
-    const keys = RasterRoadSource.corridorTiles(from, to)
-    if (keys.length > RASTER_ROADS.maxTiles) return { ok: false, reason: 'too-large' }
+    const outline = this.opts.outline === true
+    const upp = unitsPerPx(this.zoom)
+    const corridorM = outline
+      ? Math.min(RASTER_OUTLINE.corridorMaxM, Math.max(RASTER_OUTLINE.corridorMinM, RASTER_OUTLINE.corridorRatio * distanceM(from, to)))
+      : RASTER_ROADS.corridorM
+    const keys = RasterRoadSource.corridorTiles(from, to, corridorM, this.zoom)
+    if (keys.length > (outline ? RASTER_OUTLINE.maxTiles : RASTER_ROADS.maxTiles)) return { ok: false, reason: 'too-large' }
     let tx0 = Infinity, ty0 = Infinity, tx1 = -Infinity, ty1 = -Infinity
     for (const k of keys) { tx0 = Math.min(tx0, k.x); ty0 = Math.min(ty0, k.y); tx1 = Math.max(tx1, k.x); ty1 = Math.max(ty1, k.y) }
     const W = (tx1 - tx0 + 1) * 256, H = (ty1 - ty0 + 1) * 256
-    if (W * H > RASTER_ROADS.maxPixels) return { ok: false, reason: 'too-large' }
+    if (W * H > (outline ? RASTER_OUTLINE.maxPixels : RASTER_ROADS.maxPixels)) return { ok: false, reason: 'too-large' }
 
     let kinds: (Uint8Array | null)[]
     try {
@@ -109,18 +136,19 @@ export class RasterRoadSource {
       const ox = (k.x - tx0) * 256, oy = (k.y - ty0) * 256
       for (let j = 0; j < 256; j++) kind.set(t.subarray(j * 256, j * 256 + 256), (oy + j) * W + ox)
     })
-    const mpp = metersPerUnit((from.lat + to.lat) / 2) * UNITS_PER_PX
+    const mpp = metersPerUnit((from.lat + to.lat) / 2) * upp
     const sk = extractRoadSkeleton({ width: W, height: H, kind }, {
       bridgePx: Math.round(RASTER_ROADS.bridgeM / mpp),
       crossBridgePx: Math.round(RASTER_ROADS.crossBridgeM / mpp),
+      generalBridgePx: Math.round(RASTER_OUTLINE.generalBridgeM / mpp),
     })
     const gx0 = tx0 * 256, gy0 = ty0 * 256
-    const half = UNITS_PER_PX / 2
+    const half = upp / 2
     const lines: RasterRoadLine[] = []
     for (const e of sk.edges) {
       const pts = simplify(e.points, RASTER_ROADS.simplifyPx)
       const coords: number[] = []
-      for (let i = 0; i < pts.length; i += 2) coords.push((pts[i] + gx0) * UNITS_PER_PX + half, (pts[i + 1] + gy0) * UNITS_PER_PX + half)
+      for (let i = 0; i < pts.length; i += 2) coords.push((pts[i] + gx0) * upp + half, (pts[i + 1] + gy0) * upp + half)
       if (coords.length >= 4) lines.push({ kind: e.kind, coords })
     }
     return { ok: true, lines, tiles: keys.length }
@@ -134,8 +162,9 @@ export class RasterRoadSource {
       this.cache.set(key, hit)
       return hit
     }
-    const t = await this.source(RASTER_ROAD_ZOOM, x, y, signal)
+    const t = await this.source(this.zoom, x, y, signal)
     const kind = t && t.width === 256 && t.height === 256 ? classifyRoadImage(t.data, 256, 256).kind : null
+    if (kind && t && this.opts.outline) markOutlineRoads(t.data, kind, 256, 256)
     this.cache.set(key, kind)
     const max = this.opts.cacheTiles ?? RASTER_ROADS.cacheTiles
     while (this.cache.size > max) {
@@ -145,6 +174,12 @@ export class RasterRoadSource {
     }
     return kind
   }
+}
+
+function distanceM(a: LatLng, b: LatLng): number {
+  const [ax, ay] = latLngToWorld(a.lat, a.lng)
+  const [bx, by] = latLngToWorld(b.lat, b.lng)
+  return Math.hypot(bx - ax, by - ay) * metersPerUnit((a.lat + b.lat) / 2)
 }
 
 /** Douglas–Peucker（[x0, y0, …]。両端は残す） */

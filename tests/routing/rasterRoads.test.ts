@@ -6,6 +6,8 @@ import {
   classifyRoadPixel,
   classifyRoadImage,
   extractRoadSkeleton,
+  markOutlineRoads,
+  RK_GENERAL,
   RK_NONE,
   RK_MOTORWAY,
   RK_NATIONAL,
@@ -96,6 +98,7 @@ test('classifyRoadPixel: 色の付いた道だけを道とし、白い一般道�
   assert.equal(classifyRoadPixel(0x64, 0x64, 0x64), RK_NONE) // 道路縁
   assert.equal(classifyRoadPixel(0xff, 0x87, 0x4b), RK_NONE) // 市街地の塗り（国道と近い色）
   assert.equal(classifyRoadPixel(0x00, 0x00, 0x00), RK_SYMBOL) // 注記
+  assert.equal(classifyRoadPixel(0xc8, 0xa0, 0x3c), RK_NONE) // 法面のハッチ・行政界の金茶は、道に吸収する注記にしない
   assert.equal(classifyRoadPixel(0x14, 0x5a, 0xff), RK_SYMBOL) // 青い記号・線
 })
 
@@ -236,4 +239,61 @@ test('広い画像でも、道の無い所に手間を掛けない（3000 × 300
   assert.ok(connected(sk, 100, 1505, 2899, 1505))
   assert.ok(connected(sk, 1503, 100, 1503, 2899))
   assert.ok(ms < 10000, `${ms.toFixed(0)} ms`)
+})
+
+// ── 輪郭から取り出す白い一般道（地図画像のみ。設計書 §9） ─────────────────
+
+/** 白地の RGBA（256 × 256） */
+function rgbaWhite(w = 256, h = 256): Uint8ClampedArray {
+  return new Uint8ClampedArray(w * h * 4).fill(255)
+}
+function paint(d: Uint8ClampedArray, w: number, x0: number, y0: number, x1: number, y1: number, rgb: [number, number, number]): void {
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const o = (y * w + x) * 4; d[o] = rgb[0]; d[o + 1] = rgb[1]; d[o + 2] = rgb[2] }
+}
+const GRAY: [number, number, number] = [0x64, 0x64, 0x64]
+const GREEN: [number, number, number] = [0x64, 0xc3, 0x73]
+
+test('markOutlineRoads: 灰色の縁に挟まれた白の帯と灰色の線を一般道にし、広い地・小さな記号・高速の帯の縁は道にしない', () => {
+  const W = 256
+  const d = rgbaWhite()
+  paint(d, W, 0, 40, 255, 40, GRAY) // 白い道（幅 6 の白を、上下の灰色の縁で挟む）
+  paint(d, W, 0, 47, 255, 47, GRAY)
+  paint(d, W, 100, 100, 100, 255, GRAY) // 幅の狭い道（1 本の灰色の線）
+  paint(d, W, 200, 150, 207, 157, GRAY) // 記号（8 × 8）
+  paint(d, W, 0, 210, 255, 220, GREEN) // 高速の帯
+  paint(d, W, 0, 224, 255, 224, GRAY) // 帯の縁の灰色（帯から 3 画素離れている）
+  const { kind } = classifyRoadImage(d, W, 256)
+  markOutlineRoads(d, kind, W, 256)
+  const at = (x: number, y: number) => kind[y * W + x]
+  assert.equal(at(50, 43), RK_GENERAL, '白の帯の中')
+  assert.equal(at(50, 40), RK_GENERAL, '帯の縁の灰色も道に含める（一緒に細線化する）')
+  assert.equal(at(100, 130), RK_GENERAL, '1 本の灰色の線')
+  assert.equal(at(50, 120), RK_NONE, '広い地')
+  assert.equal(at(203, 153), RK_NONE, '小さな記号')
+  assert.equal(at(50, 224), RK_NONE, '高速の帯の縁')
+  assert.equal(at(50, 215), RK_MOTORWAY)
+})
+
+test('一般道: 高速の帯の下をくぐる道は、向かい合う端どうしの橋でつながる。一般道の端から高速へは架けない', () => {
+  const img = blank(300, 300)
+  rect(img, 0, 140, 299, 151, RK_MOTORWAY) // 本線の帯（幅 12）
+  rect(img, 147, 0, 150, 125, RK_GENERAL) // 帯の北で切れた道
+  rect(img, 147, 166, 150, 299, RK_GENERAL) // 帯の南から続く道
+  rect(img, 30, 100, 33, 133, RK_GENERAL) // 帯へ向かって行き止まる道（帯の縁から 6 画素）
+  const sk = extractRoadSkeleton(img)
+  assert.ok(connected(sk, 148, 5, 148, 295), 'くぐる道がつながる')
+  assert.ok(!connected(sk, 31, 105, 5, 145), '一般道の行き止まりから高速へは架けない')
+})
+
+test('一般道があるとき、本線の帯の切れ目（太い端）から一般道へは架けない。ランプ（細い端）からは架ける', () => {
+  const img = blank(300, 300)
+  rect(img, 0, 100, 134, 105, RK_MOTORWAY) // 本線（幅 6）が跨道橋で切れる
+  rect(img, 165, 100, 299, 105, RK_MOTORWAY)
+  rect(img, 147, 0, 151, 299, RK_GENERAL) // 跨ぐ一般道
+  rect(img, 20, 200, 120, 202, RK_MOTORWAY) // ランプ（幅 3）が一般道の手前で終わる
+  rect(img, 130, 150, 133, 299, RK_GENERAL)
+  const sk = extractRoadSkeleton(img, { crossBridgePx: 15, rampMaxWidthPx: 4 })
+  assert.ok(connected(sk, 5, 102, 295, 102), '本線は切れ目の向こうへ続く')
+  assert.ok(!connected(sk, 5, 102, 149, 20), '本線から跨ぐ一般道へは降りない')
+  assert.ok(connected(sk, 25, 201, 131, 290), 'ランプの端から一般道へ')
 })

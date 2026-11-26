@@ -97,7 +97,22 @@ function bandSource(calls: string[] = []) {
   return async (z: number, x: number, y: number) => {
     calls.push(`${z}/${x}/${y}`)
     const data = new Uint8ClampedArray(256 * 256 * 4).fill(255)
-    for (let j = 0; j < 256; j++) for (let i = 124; i < 132; i++) { const o = (j * 256 + i) * 4; data[o] = 0x64; data[o + 1] = 0xc3; data[o + 2] = 0x73 }
+    // z16 の各タイルの x = 124〜131 に帯（ほかのズームでも、同じ所に描く）
+    const f = 2 ** (z - RASTER_ROAD_ZOOM)
+    for (let i = 0; i < 256; i++) {
+      const wx = Math.floor((x * 256 + i) / f) % 256
+      if (wx < 124 || wx >= 132) continue
+      for (let j = 0; j < 256; j++) { const o = (j * 256 + i) * 4; data[o] = 0x64; data[o + 1] = 0xc3; data[o + 2] = 0x73 }
+    }
+    return { width: 256, height: 256, data }
+  }
+}
+
+/** 白い一般道（灰色の縁で挟んだ幅 6 の白）を、z17 の各タイルの y = 100〜107 に横に描く */
+function whiteRoadSource() {
+  return async (_z: number, _x: number, _y: number) => {
+    const data = new Uint8ClampedArray(256 * 256 * 4).fill(255)
+    for (const j of [100, 107]) for (let i = 0; i < 256; i++) { const o = (j * 256 + i) * 4; data[o] = data[o + 1] = data[o + 2] = 0x64 }
     return { width: 256, height: 256, data }
   }
 }
@@ -166,6 +181,22 @@ test('Router: raster で画像の高速の帯をたどる', async () => {
   // 帯の中心（x = 128）から離れない
   const cx = latLngToWorld(from.lat, from.lng)[0]
   for (const p of r.points) assert.ok(Math.abs(latLngToWorld(p.lat, p.lng)[0] - cx) < 4 * 4)
+})
+
+test('Router: raster は、白い一般道を輪郭から取り出してたどる（ベクトルタイルは読まない）', async () => {
+  let vectorCalls = 0
+  const vec = async () => { vectorCalls++; return null }
+  const router = new Router(vec, { coarseLoader: vec, raster: whiteRoadSource() })
+  const s17 = 2 ** (14 + 12 - 8 - 17)
+  const ty = TY * 8 + 2, tx = TX * 8 + 2
+  const from = worldToLatLng((tx * 256 + 10) * s17, (ty * 256 + 110) * s17)
+  const to = worldToLatLng(((tx + 2) * 256 + 200) * s17, (ty * 256 + 96) * s17)
+  const r = await router.routeLeg(from, to, resolveRoutingOptions({ ...DEFAULT_ROUTING_SETTINGS, source: 'raster' }))
+  assert.equal(r.status, 'ok', r.reason)
+  assert.equal(r.raster, 'used')
+  assert.equal(vectorCalls, 0)
+  const cy = (ty * 256 + 103.5) * s17
+  for (const p of r.points.slice(1, -1)) assert.ok(Math.abs(latLngToWorld(p.lat, p.lng)[1] - cy) <= 3 * s17, '道の中ほどを通る')
 })
 
 test('設定: 経路の元の既定は vector。壊れた値は既定へ。探索の値に渡る', () => {
