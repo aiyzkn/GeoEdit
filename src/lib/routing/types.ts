@@ -57,9 +57,13 @@ export interface RoutingOptions {
   snap: SnapParams
   /** 分離帯のある道路の線を、地図画像の車線に合わせる（§13）。省略は false */
   lane?: boolean
+  /** 地図画像のズームの上限（経路の元の選択設計書 §4.3）。省略は 17 */
+  rasterMaxZoom?: RasterMaxZoom
   /** 経路の元（経路の元の選択設計書 §3.1）。省略は 'vector' */
   source?: RouteSource
 }
+
+export type RasterMaxZoom = 16 | 17 | 18
 
 /** vector = ベクトルタイルのみ / hybrid = 地図画像＋ベクトルタイル / raster = 地図画像のみ（試験的） */
 export type RouteSource = 'vector' | 'hybrid' | 'raster'

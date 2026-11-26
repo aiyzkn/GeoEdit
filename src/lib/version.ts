@@ -1,6 +1,6 @@
 /** ページのタイトル・ヘッダー・バージョン情報・GPX の creator に出すアプリケーション名（1.2.0 で「GeoJSON / GPX / KML Editor」から変更） */
 export const APP_NAME = 'Route Editor'
-export const APP_VERSION = '1.2.0'
+export const APP_VERSION = '1.3.0'
 
 export interface ReleaseEntry {
   version: string
@@ -14,6 +14,16 @@ export interface ReleaseEntry {
  * セマンティックバージョニング: 互換性のない大規模更改.一般的な機能追加.バグフィックス
  */
 export const CHANGELOG: ReleaseEntry[] = [
+  {
+    version: '1.3.0',
+    date: '2026-11-26',
+    type: 'minor',
+    notes: [
+      '経路探索の「経路の元」を選べる（ベクトルタイルのみ / 地図画像＋ベクトルタイル / 地図画像のみ（試験的））。開通したばかりでベクトルタイルに無い道（圏央道 大栄JCT–多古IC など）も、地図画像から引ける',
+      '高速道路・有料道路の経路は、分離帯の描画によらず上り・下りを別の線にして、進む向きの左側を通す（標準地図 z17 の緑の帯に合わせる）',
+      '地図画像のズームの上限（16 / 17 / 18。既定 17）を選べる',
+    ],
+  },
   {
     version: '1.2.0',
     date: '2026-11-19',

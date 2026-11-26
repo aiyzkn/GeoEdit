@@ -9,7 +9,7 @@
 
 import { classifyPixel } from '../mapMatch/palette.ts'
 import { extractRuns, fillSymbolNoise } from '../mapMatch/matcher.ts'
-import { BG, IGNORE, type PixelClass } from '../mapMatch/types.ts'
+import { BG, EDGE, IGNORE, ROAD, type PixelClass } from '../mapMatch/types.ts'
 import { latLngToWorld, worldToLatLng } from './geo.ts'
 import type { LatLng } from './types.ts'
 
@@ -148,12 +148,105 @@ function simplify(pts: [number, number][], tol: number): [number, number][] {
   return pts.filter((_, i) => keep[i])
 }
 
+/**
+ * 緑の道（高速道路・有料道路）の画素の分類（経路の元の選択設計書 §4.4）。z16・z17 では、緑の道は実際の幅ではなく記号の帯で描かれる。
+ * 緑の塗り = ROAD、灰色の縁・中央の線 = EDGE、注記・記号の暗い色 = IGNORE、そのほか（白い一般道・国道・地の色）= BG
+ */
+export function classifyGreenPixel(r: number, g: number, b: number): PixelClass {
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+  if (lum <= 95) return IGNORE
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b)
+  if (mx - mn <= 16 && lum <= 190) return EDGE
+  if ((r - 100) ** 2 + (g - 195) ** 2 + (b - 115) ** 2 <= 40 ** 2) return ROAD
+  return BG
+}
+
+/**
+ * 緑の帯の走査の値（z17 の画素。2026-11-26 に実タイルで測った: 帯 1 本 ≒ 11 画素、帯 2 本 ≒ 10 画素 ×2 と灰色の線 2〜3 画素、ランプ ≒ 4 画素）。
+ * z16 では半分にする（greenParams）
+ */
+export const GREEN = {
+  /** 走査の半幅 */
+  scanPx: 24,
+  /** 上下線を兼ねる帯 1 本とみなす幅の下限（これより細いものはランプとみなし、寄せない）と上限 */
+  bandMinPx: 8,
+  bandMaxPx: 22,
+  /** 帯 2 本のときの、帯 1 本の幅の下限（東関東道 行方IC–鉾田IC は 4〜5 画素。ランプは 1 本だけで、灰色の細い線を挟んで並ばない） */
+  halfMinPx: 3,
+  /** 帯 2 本の間（灰色の線）の上限 */
+  gapMaxPx: 5,
+  /** 線の上の点から帯までの許容 */
+  nearPx: 6,
+  /** 帯 1 本のとき、帯の中心から左へ寄せる量（m）。参照の手打ちの線の上下線の間隔 8 m の半分 */
+  singleShiftM: 4,
+  /** 帯 1 本のとき、帯の縁から離す量（画素） */
+  marginPx: 1.5,
+  /** 中央値を取る範囲（前後の点数。±8 点 ≒ ±40 m）と、要る点数 */
+  window: 8,
+  minSamples: 3,
+  /** 帯を見つけられない所を、前後の結果でつなぐ長さ（m）。これより長い所は寄せる量を 0 へ戻す */
+  bridgeM: 60,
+} as const
+
+export interface GreenParams { scanPx: number; bandMinPx: number; bandMaxPx: number; halfMinPx: number; gapMaxPx: number; nearPx: number; marginPx: number }
+
+/** ズームごとの値。z17 が基準（z16 は帯が半分の幅） */
+export function greenParams(zoom: number): GreenParams {
+  const k = 2 ** (zoom - 17)
+  return {
+    scanPx: Math.round(GREEN.scanPx * k),
+    bandMinPx: Math.max(3, Math.round(GREEN.bandMinPx * k)),
+    bandMaxPx: Math.round(GREEN.bandMaxPx * k),
+    halfMinPx: Math.max(2, Math.round(GREEN.halfMinPx * k)),
+    gapMaxPx: Math.max(2, Math.round(GREEN.gapMaxPx * k)),
+    nearPx: Math.max(3, Math.round(GREEN.nearPx * k)),
+    marginPx: GREEN.marginPx * Math.min(1, k),
+  }
+}
+
+/**
+ * 緑の帯の走査線（index R が線の上の点、index が増える向きが進む向きの左）から、寄せる量（画素）を決める。
+ * 帯 2 本（上下線の間に灰色の線）→ 左の帯の中心。帯 1 本 → 帯の中心から左へ singlePx（帯の中に収める）。
+ * 細い帯（ランプ）・帯が無い → null
+ */
+export function greenScan(samples: Uint8Array, p: GreenParams, singlePx: number): { offset: number; divided: boolean } | null {
+  const R = (samples.length - 1) / 2
+  const last = samples.length - 1
+  const runs = extractRuns(samples).filter((r) => r.start > 0 && r.end < last)
+  const w = (r: { start: number; end: number }) => r.end - r.start + 1
+  const mid = (r: { start: number; end: number }) => (r.start + r.end) / 2
+  const dist = (r: { start: number; end: number }) => (R < r.start ? r.start - R : R > r.end ? R - r.end : 0)
+  // 帯 2 本: 隣り合う 2 つの帯の間が細い灰色の線で、線の上の点が 2 本の帯の範囲の近くにある
+  let pair: { a: { start: number; end: number }; b: { start: number; end: number }; d: number } | null = null
+  for (let i = 0; i + 1 < runs.length; i++) {
+    const a = runs[i], b = runs[i + 1]
+    const gap = b.start - a.end - 1
+    if (gap < 1 || gap > p.gapMaxPx) continue
+    if (w(a) < p.halfMinPx || w(b) < p.halfMinPx || w(a) > p.bandMaxPx || w(b) > p.bandMaxPx) continue
+    if (R < a.start - p.nearPx || R > b.end + p.nearPx) continue
+    const d = Math.abs((a.end + b.start) / 2 - R)
+    if (!pair || d < pair.d) pair = { a, b, d }
+  }
+  if (pair) return { offset: mid(pair.b) - R, divided: true }
+  // 帯 1 本: 線の上の点を含む（または近い）帯
+  let best: { start: number; end: number } | null = null
+  for (const r of runs) if (!best || dist(r) < dist(best)) best = r
+  if (!best || dist(best) > p.nearPx || w(best) < p.bandMinPx || w(best) > p.bandMaxPx) return null
+  const shift = Math.max(0, Math.min(singlePx, w(best) / 2 - p.marginPx))
+  return { offset: mid(best) + shift - R, divided: false }
+}
+
 export interface CorrectOptions {
   /**
    * 高速道路の本線（上下線を兼ねる 1 本の線。画像ではいつも分離帯が描かれている）。
    * 分離帯を見つけた点だけを使い、広い範囲の中央値で均す（注記・ランプの線・橋で 1 点ずつ振れないように。§14.5）
    */
   motorway?: boolean
+  /**
+   * 緑の道（高速道路・有料道路）を、z16・z17 の画像の緑の帯で上下線に分ける（経路の元の選択設計書 §4.4）。値は画像のズーム。
+   * 指定したときは motorway を見ない
+   */
+  greenZoom?: number
   /** false なら、その端で寄せる量を 0 に戻さない（端の点も動かす）。ランプへなめらかにつなぐとき。既定は true */
   taperStart?: boolean
   taperEnd?: boolean
@@ -169,6 +262,7 @@ export class LaneMatcher {
     this.max = opts.cacheTiles ?? 600
   }
 
+  /** keys は `z/x/y`。z18 は車線の分類（classifyLanePixel）、それより下は緑の道の分類（classifyGreenPixel） */
   private async loadTiles(keys: string[], signal?: AbortSignal) {
     // いま使うタイルを「新しい」側へ移す（追い出しで、これから使うタイルを捨てないため）
     for (const k of keys) {
@@ -177,16 +271,17 @@ export class LaneMatcher {
     }
     const missing = keys.filter((k) => !this.tiles.has(k))
     const loadOne = async (k: string) => {
-      const [x, y] = k.split('/').map(Number)
+      const [z, x, y] = k.split('/').map(Number)
+      const classify = z >= LANE_ZOOM ? classifyLanePixel : classifyGreenPixel
       for (let attempt = 0; attempt < 2; attempt++) {
         if (signal?.aborted) return
         try {
-          const img = await this.source(LANE_ZOOM, x, y, signal)
+          const img = await this.source(z, x, y, signal)
           let cls: Uint8Array | null = null
           if (img && img.width === 256 && img.height === 256) {
             cls = new Uint8Array(256 * 256)
             const d = img.data
-            for (let i = 0; i < cls.length; i++) cls[i] = classifyLanePixel(d[4 * i], d[4 * i + 1], d[4 * i + 2])
+            for (let i = 0; i < cls.length; i++) cls[i] = classify(d[4 * i], d[4 * i + 1], d[4 * i + 2])
           }
           this.tiles.set(k, cls) // null = タイルが無い（404）。覚えておく
           return
@@ -210,20 +305,20 @@ export class LaneMatcher {
     }
   }
 
-  private pixel(x: number, y: number): PixelClass | -1 {
-    const t = this.tiles.get(`${Math.floor(x / 256)}/${Math.floor(y / 256)}`)
+  private pixel(z: number, x: number, y: number): PixelClass | -1 {
+    const t = this.tiles.get(`${z}/${Math.floor(x / 256)}/${Math.floor(y / 256)}`)
     if (!t) return -1
     return t[(((y % 256) + 256) % 256) * 256 + (((x % 256) + 256) % 256)] as PixelClass
   }
 
-  /** (cx, cy) を中心に、向き (nx, ny) の走査線の分類。画像が無ければ null */
-  private scan(cx: number, cy: number, nx: number, ny: number, R: number): Uint8Array | null {
+  /** ズーム z の画素の (cx, cy) を中心に、向き (nx, ny) の走査線の分類。画像が無ければ null */
+  private scan(z: number, cx: number, cy: number, nx: number, ny: number, R: number): Uint8Array | null {
     const size = 2 * R + 1
     const patch = new Uint8Array(size * size)
     const x0 = Math.round(cx) - R, y0 = Math.round(cy) - R
     for (let j = 0; j < size; j++) {
       for (let i = 0; i < size; i++) {
-        const c = this.pixel(x0 + i, y0 + j)
+        const c = this.pixel(z, x0 + i, y0 + j)
         if (c === -1) return null
         patch[j * size + i] = c
       }
@@ -261,25 +356,38 @@ export class LaneMatcher {
     // 両端で 0 に戻す区間が短いと、寄せてすぐ戻すだけの小さな折れになるので、合わせない（60 m 未満）
     if (opts.taperStart !== false && opts.taperEnd !== false && total < 3 * LANE.taperPx) return points
     // 2. 画像のタイルを取る
+    // 世界座標の 1 は z18 の画素 1 つ。緑の道は z16・z17 の画像で走査する（k = その画素 / 世界座標）
+    const gz = opts.greenZoom
+    const k = gz !== undefined ? 2 ** (gz - LANE_ZOOM) : 1
+    const gp = gz !== undefined ? greenParams(gz) : null
+    const z = gz ?? LANE_ZOOM
     const keys = new Set<string>()
     const sp = opts.motorway ? MOTORWAY_SCAN : ROAD_SCAN
-    const R = sp.scanPx + 2
+    const R = (gp ? gp.scanPx : sp.scanPx) + 2
     for (const p of samples) {
-      for (const dx of [-R, R]) for (const dy of [-R, R]) keys.add(`${Math.floor((p.x + dx) / 256)}/${Math.floor((p.y + dy) / 256)}`)
+      for (const dx of [-R, R]) for (const dy of [-R, R]) keys.add(`${z}/${Math.floor((p.x * k + dx) / 256)}/${Math.floor((p.y * k + dy) / 256)}`)
     }
     await this.loadTiles([...keys], signal)
     if (signal?.aborted) return points
     // 3. 点ごとに、進む向きの左の法線で走査して寄せる量を決める
     const scans: ({ offset: number; divided: boolean } | null)[] = []
     const normals: [number, number][] = []
+    const mPerPx = (156543.03392 * Math.cos((points[0].lat * Math.PI) / 180)) / 2 ** z
+    const singlePx = GREEN.singleShiftM / mPerPx
     for (let i = 0; i < samples.length; i++) {
       const a = samples[Math.max(0, i - 2)], b = samples[Math.min(samples.length - 1, i + 2)]
       const L = Math.hypot(b.x - a.x, b.y - a.y) || 1
       const tx = (b.x - a.x) / L, ty = (b.y - a.y) / L
       const nx = ty, ny = -tx // 画面の座標（y が下向き）で、進む向きの左
       normals.push([nx, ny])
-      const line = this.scan(samples[i].x, samples[i].y, nx, ny, sp.scanPx)
-      scans.push(line ? laneScan(line, sp) : null)
+      if (gp) {
+        const line = this.scan(z, samples[i].x * k, samples[i].y * k, nx, ny, gp.scanPx)
+        const r = line ? greenScan(line, gp, singlePx) : null
+        scans.push(r ? { offset: r.offset / k, divided: r.divided } : null)
+      } else {
+        const line = this.scan(z, samples[i].x, samples[i].y, nx, ny, sp.scanPx)
+        scans.push(line ? laneScan(line, sp) : null)
+      }
     }
     // 分離帯が描かれている所に挟まれた、短い「描かれていない」所（交差点など）は、車線を保ったまま通す
     const offs: (number | null)[] = scans.map((r, i) => {
@@ -295,7 +403,33 @@ export class LaneMatcher {
     })
     // 4. 決められなかった所は前後から補い、外れ値を中央値で均し、上限で切り、両端で 0 へ近づける
     let smooth: number[]
-    if (opts.motorway) {
+    if (gp) {
+      // 緑の道: 帯を見つけた点（帯 2 本・帯 1 本）を使い、前後 ±W 点の中央値で均す。
+      // 見つからない所（ランプ・料金所・JCT など）が短ければ前後でつなぎ、長ければ寄せる量を 0 に戻す（移動平均でなめらかに）
+      const vals = scans.map((r) => (r ? r.offset : null))
+      const W = GREEN.window
+      const med: (number | null)[] = vals.map((_, i) => {
+        const win = vals.slice(Math.max(0, i - W), i + W + 1).filter((v): v is number => v !== null)
+        return win.length >= GREEN.minSamples ? median(win) : null
+      })
+      if (med.every((v) => v === null)) return points
+      const bridge = GREEN.bridgeM / (mPerPx * k)
+      const filledG = med.map((v, i) => {
+        if (v !== null) return v
+        let l = i - 1, r = i + 1
+        while (l >= 0 && med[l] === null) l--
+        while (r < med.length && med[r] === null) r++
+        if (l >= 0 && r < med.length && samples[r].s - samples[l].s <= bridge) {
+          const f = (samples[i].s - samples[l].s) / (samples[r].s - samples[l].s)
+          return med[l]! + (med[r]! - med[l]!) * f
+        }
+        return 0
+      })
+      smooth = filledG.map((_, i) => {
+        const win = filledG.slice(Math.max(0, i - 3), i + 4)
+        return win.reduce((x, y) => x + y, 0) / win.length
+      })
+    } else if (opts.motorway) {
       // 高速の本線: 分離帯を見つけた点だけを使い、前後 ±W 点（約 ±40 m）の中央値 → 移動平均で均す
       const vals = scans.map((r) => (r && r.divided ? r.offset : null))
       const W = LANE.motorwayWindow

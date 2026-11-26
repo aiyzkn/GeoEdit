@@ -175,4 +175,11 @@ test('設定: 経路の元の既定は vector。壊れた値は既定へ。探�
   assert.equal(sanitizeSettings({ source: 'nope' }).source, 'vector')
   assert.equal(sanitizeSettings({}).source, 'vector')
   assert.equal(resolveRoutingOptions({ ...DEFAULT_ROUTING_SETTINGS, source: 'hybrid' }).source, 'hybrid')
+  // 地図画像のズームの上限（§4.3）
+  assert.equal(DEFAULT_ROUTING_SETTINGS.rasterMaxZoom, 17)
+  assert.equal(sanitizeSettings({ rasterMaxZoom: 16 }).rasterMaxZoom, 16)
+  assert.equal(sanitizeSettings({ rasterMaxZoom: 18 }).rasterMaxZoom, 18)
+  assert.equal(sanitizeSettings({ rasterMaxZoom: 19 }).rasterMaxZoom, 17)
+  assert.equal(sanitizeSettings({ rasterMaxZoom: '17' }).rasterMaxZoom, 17)
+  assert.equal(resolveRoutingOptions({ ...DEFAULT_ROUTING_SETTINGS, rasterMaxZoom: 16 }).rasterMaxZoom, 16)
 })
