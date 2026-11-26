@@ -9,7 +9,7 @@ import { useUiStore } from '@/stores/uiStore'
 import { matchPoint, isMatchModifierPressed } from '@/lib/mapMatch'
 import { matchTrack, routeLeg, snapAnchor } from '@/lib/routingClient'
 import { resolveRoutingOptions } from '@/lib/routing/settings'
-import type { FallbackReason, LatLng, RoadClass } from '@/lib/routing'
+import type { FallbackReason, LatLng, RasterNote, RoadClass } from '@/lib/routing'
 import {
   addAnchor, bumpPending, draftFromMatch, emptyDraft, insertAnchor, moveAnchor, newId, pendingLegs, removeAnchor, resetAutoLegs, setLegResult,
 } from '@/lib/editors/draft'
@@ -23,6 +23,14 @@ const FALLBACK_MESSAGES: Record<Exclude<FallbackReason, 'aborted'>, string> = {
   'no-route': '経路が見つからないため、直線で結びました',
   'too-long': '区間が長すぎるため、直線で結びました。途中に通過点を置いてください（1 区間は直線距離で 100 km まで）',
   'tile-error': '道路データを取得できないため、直線で結びました',
+}
+
+/** 経路の元が地図画像を使う設定のときの知らせ（経路の元の選択設計書 §5） */
+const RASTER_MESSAGES: Record<RasterNote, { level: 'info' | 'warning'; text: string }> = {
+  used: { level: 'info', text: '地図画像の道を使って経路を引きました（ベクトルタイルに無い道を通ります）' },
+  unavailable: { level: 'warning', text: 'この環境では地図画像を読めないため、ベクトルタイルだけで経路を引きました' },
+  'too-large': { level: 'warning', text: '区間が長いため、地図画像を使わずにベクトルタイルだけで経路を引きました。途中に通過点を置くと使えます' },
+  'tile-error': { level: 'warning', text: '地図画像を取得できないため、ベクトルタイルだけで経路を引きました' },
 }
 
 const store = () => useEditorStore.getState()
@@ -66,12 +74,16 @@ function requestLeg(legId: string) {
     const next = setLegResult(cur, legId, gen, result)
     if (next === cur) return // 古い結果
     store().setDraft(next)
+    const key = `${legId}:${gen}`
     if (result.status === 'fallback' && result.reason) {
-      const key = `${legId}:${gen}`
       if (!toasted.has(key)) {
         toasted.add(key)
         useUiStore.getState().addToast('warning', FALLBACK_MESSAGES[result.reason])
       }
+    } else if (result.raster && !toasted.has(key)) {
+      toasted.add(key)
+      const m = RASTER_MESSAGES[result.raster]
+      useUiStore.getState().addToast(m.level, m.text)
     }
   })
 }
